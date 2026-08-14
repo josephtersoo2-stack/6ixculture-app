@@ -8,6 +8,9 @@ return new class extends Migration
 {
     public function up()
     {
+        if (!Schema::hasTable('states') || !Schema::hasTable('cities')) {
+            return;
+        }
         $nigeriaLgas = [
             'Abuja Federal Capital Territory' => [
                 'Abaji', 'Bwari', 'Gwagwalada', 'Kuje', 'Abuja Municipal (AMAC)', 'Kwali'

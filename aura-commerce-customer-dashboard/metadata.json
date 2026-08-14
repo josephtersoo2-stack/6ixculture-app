@@ -1,0 +1,6 @@
+{
+  "name": "Aura Commerce Customer Dashboard",
+  "description": "A comprehensive, modern e-commerce user account dashboard featuring real-time order tracking, easy returns, multi-collection wishlist, wallet and payment management, address book, VIP rewards club, and instant support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
