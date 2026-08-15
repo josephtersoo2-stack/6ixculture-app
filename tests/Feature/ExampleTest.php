@@ -2,16 +2,27 @@
 
 namespace Tests\Feature;
 
-// use Illuminate\Foundation\Testing\RefreshDatabase;
+use Database\Seeders\CompanyTableSeeder;
+use Database\Seeders\SiteTableSeeder;
+use Database\Seeders\ThemeTableSeeder;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
 class ExampleTest extends TestCase
 {
+    use RefreshDatabase;
+
     /**
      * A basic test example.
      */
     public function test_the_application_returns_a_successful_response(): void
     {
+        $this->seed([
+            ThemeTableSeeder::class,
+            SiteTableSeeder::class,
+            CompanyTableSeeder::class,
+        ]);
+
         $response = $this->get('/');
 
         $response->assertStatus(200);

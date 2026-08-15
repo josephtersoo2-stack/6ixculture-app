@@ -12,7 +12,14 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->app->bind(
+            \App\Support\Contracts\AiOrchestratorInterface::class,
+            \App\Support\Services\SupportOrchestrator::class
+        );
+        $this->app->bind(
+            \App\Support\Contracts\PolicyEngineInterface::class,
+            \App\Support\Policies\SupportActionPolicyEngine::class
+        );
     }
 
     /**
