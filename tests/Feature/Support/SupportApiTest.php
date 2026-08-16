@@ -329,4 +329,185 @@ class SupportApiTest extends TestCase
 
         $this->assertEquals(ConversationStatus::QUEUED, $conv->fresh()->status);
     }
+
+    /**
+     * Test 1 — Wrong guest token cannot access guest conversation (404)
+     */
+    public function test_wrong_guest_token_cannot_access_guest_conversation(): void
+    {
+        $guestToken = 'valid_guest_uuid_111';
+        $conv = SupportConversation::create([
+            'guest_session_id' => $guestToken,
+            'status' => ConversationStatus::AI_ACTIVE,
+            'mode' => ConversationMode::AI,
+            'language' => 'en',
+        ]);
+
+        $res = $this->getJson("/api/v1/support/conversations/{$conv->public_id}", [
+            'X-Guest-Token' => 'incorrect_guest_uuid_999'
+        ]);
+
+        $res->assertStatus(404)
+            ->assertJsonPath('error.code', 'SUPPORT_CONVERSATION_NOT_FOUND');
+    }
+
+    /**
+     * Test 2 — Authenticated user cannot claim guest conversation without token (404, remains unlinked)
+     */
+    public function test_authenticated_user_cannot_claim_guest_conversation_without_token(): void
+    {
+        $userA = User::factory()->create(['username' => 'user_a_unclaimed']);
+        $guestToken = 'valid_guest_uuid_222';
+        $conv = SupportConversation::create([
+            'guest_session_id' => $guestToken,
+            'customer_id' => null,
+            'status' => ConversationStatus::AI_ACTIVE,
+            'mode' => ConversationMode::AI,
+            'language' => 'en',
+        ]);
+
+        Sanctum::actingAs($userA);
+
+        // Attempt access without X-Guest-Token
+        $res = $this->getJson("/api/v1/support/conversations/{$conv->public_id}");
+
+        $res->assertStatus(404);
+        $this->assertNull($conv->fresh()->customer_id);
+    }
+
+    /**
+     * Test 3 — Authenticated user with valid guest token may explicitly link (200, links to User A)
+     */
+    public function test_authenticated_user_with_valid_guest_token_may_explicitly_link(): void
+    {
+        $userA = User::factory()->create(['username' => 'user_a_explicit_link']);
+        $guestToken = 'valid_guest_uuid_333';
+        $conv = SupportConversation::create([
+            'guest_session_id' => $guestToken,
+            'customer_id' => null,
+            'status' => ConversationStatus::AI_ACTIVE,
+            'mode' => ConversationMode::AI,
+            'language' => 'en',
+        ]);
+
+        Sanctum::actingAs($userA);
+
+        // Send with valid guest token
+        $res = $this->getJson("/api/v1/support/conversations/{$conv->public_id}", [
+            'X-Guest-Token' => $guestToken
+        ]);
+
+        $res->assertStatus(200);
+        $this->assertEquals($userA->id, $conv->fresh()->customer_id);
+
+        // Subsequent access succeeds without needing the guest token header
+        $subsequentRes = $this->getJson("/api/v1/support/conversations/{$conv->public_id}");
+        $subsequentRes->assertStatus(200);
+    }
+
+    /**
+     * Test 4 — Authenticated User B cannot claim User A's linked conversation (404)
+     */
+    public function test_authenticated_user_b_cannot_claim_user_a_linked_conversation(): void
+    {
+        $userA = User::factory()->create(['username' => 'user_a_owner']);
+        $userB = User::factory()->create(['username' => 'user_b_intruder']);
+        $guestToken = 'valid_guest_uuid_444';
+
+        $conv = SupportConversation::create([
+            'guest_session_id' => $guestToken,
+            'customer_id' => $userA->id,
+            'status' => ConversationStatus::AI_ACTIVE,
+            'mode' => ConversationMode::AI,
+            'language' => 'en',
+        ]);
+
+        Sanctum::actingAs($userB);
+
+        // User B tries with old guest token header
+        $res1 = $this->getJson("/api/v1/support/conversations/{$conv->public_id}", [
+            'X-Guest-Token' => $guestToken
+        ]);
+        $res1->assertStatus(404);
+
+        // User B tries without header
+        $res2 = $this->getJson("/api/v1/support/conversations/{$conv->public_id}");
+        $res2->assertStatus(404);
+    }
+
+    /**
+     * Test 5 — Route action cannot be overridden by body tool_name (422)
+     */
+    public function test_route_action_cannot_be_overridden_by_body_tool_name(): void
+    {
+        $customer = User::factory()->create(['username' => 'cust_action_mismatch']);
+        Sanctum::actingAs($customer);
+
+        $conv = SupportConversation::create([
+            'customer_id' => $customer->id,
+            'status' => ConversationStatus::AI_ACTIVE,
+            'mode' => ConversationMode::AI,
+            'language' => 'en',
+        ]);
+
+        $res = $this->postJson("/api/v1/support/conversations/{$conv->public_id}/actions/request_refund", [
+            'tool_name' => 'track_my_order', // Divergent tool in body
+            'arguments' => ['order_id' => 999],
+            'confirmed' => true,
+        ]);
+
+        $res->assertStatus(422)
+            ->assertJsonPath('error.code', 'ACTION_MISMATCH');
+    }
+
+    /**
+     * Test 6 — Route action is the authority and evaluates policy correctly
+     */
+    public function test_route_action_is_the_authority(): void
+    {
+        $customer = User::factory()->create(['username' => 'cust_action_auth']);
+        Sanctum::actingAs($customer);
+
+        $conv = SupportConversation::create([
+            'customer_id' => $customer->id,
+            'status' => ConversationStatus::AI_ACTIVE,
+            'mode' => ConversationMode::AI,
+            'language' => 'en',
+        ]);
+
+        // Body tool_name omitted or matches route
+        $res = $this->postJson("/api/v1/support/conversations/{$conv->public_id}/actions/request_refund", [
+            'arguments' => ['order_id' => 123, 'reason' => 'Damaged on delivery'],
+            'confirmed' => true,
+        ]);
+
+        $res->assertStatus(200)
+            ->assertJsonPath('status', 'queued_for_human');
+
+        $this->assertEquals(ConversationStatus::QUEUED, $conv->fresh()->status);
+    }
+
+    /**
+     * Test 7 — Unknown route action fails closed (404)
+     */
+    public function test_unknown_route_action_fails_closed(): void
+    {
+        $customer = User::factory()->create(['username' => 'cust_unknown_action']);
+        Sanctum::actingAs($customer);
+
+        $conv = SupportConversation::create([
+            'customer_id' => $customer->id,
+            'status' => ConversationStatus::AI_ACTIVE,
+            'mode' => ConversationMode::AI,
+            'language' => 'en',
+        ]);
+
+        $res = $this->postJson("/api/v1/support/conversations/{$conv->public_id}/actions/non_existent_exploit_tool", [
+            'arguments' => ['payload' => 'rm -rf'],
+            'confirmed' => true,
+        ]);
+
+        $res->assertStatus(404)
+            ->assertJsonPath('error.code', 'TOOL_NOT_FOUND');
+    }
 }

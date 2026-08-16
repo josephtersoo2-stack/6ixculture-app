@@ -93,10 +93,32 @@ The following REST API routes were implemented under the `/api/v1/support/` pref
 
 ---
 
-## 4. Test Verification Summary
+---
 
-- **Total Test Suite:** 35 passed, 0 failed (164 assertions)
-- **New Feature Tests:** `tests/Feature/Support/SupportApiTest.php` (9 tests, 43 assertions)
+## 4. Phase 4 Security Hardening Review & Verification
+
+Following architectural review, a targeted security hardening pass was executed across two key authorization boundaries:
+
+### A. Guest Conversation Ownership Takeover Correction
+- **Vulnerability Remediated:** Previously, an authenticated customer querying an unlinked guest conversation public ID would automatically claim ownership of the conversation without proving prior possession.
+- **Hardened Invariant:** A guest conversation is strictly protected by its `guest_session_id`. An authenticated customer **must present valid cryptographic proof (`X-Guest-Token === conversation.guest_session_id`)** to explicitly link the guest conversation to their customer account.
+- **Cross-Customer Isolation:** If an unauthenticated user or a different authenticated customer queries the conversation without the exact token, the system returns `404 SUPPORT_CONVERSATION_NOT_FOUND` and leaves the guest conversation unlinked.
+
+### B. Action Endpoint Route Authority Enforcement
+- **Vulnerability Remediated:** The action endpoint `POST /api/v1/support/conversations/{conversation}/actions/{action}` formerly read `tool_name` from the request body, allowing divergence between the URL action parameter and body tool name.
+- **Hardened Invariant:** The URL route parameter `$action` is the sole authoritative capability selector (`$toolName = $action;`). If a client passes `tool_name` in the payload body, it is treated strictly as an assertion; any mismatch returns `422 ACTION_MISMATCH` and halts execution.
+- **Fail-Closed Capability Discovery:** If an unregistered or uncataloged action is requested, the endpoint immediately returns `404 TOOL_NOT_FOUND`.
+
+### C. Confirmation vs. Authorization Boundary
+- Customer intent (`confirmed: true`) is treated strictly as an intent assertion and never bypasses server-side policy evaluation (`SupportActionPolicyEngine`).
+- Sensitive and critical tools (`request_refund`, cancellations, payment modifications) always evaluate to `REQUIRE_HUMAN` and safely queue the request for supervisor review.
+
+---
+
+## 5. Test Verification Summary
+
+- **Total Test Suite:** 42 passed, 0 failed (180 assertions)
+- **Feature Test Suite (`tests/Feature/Support/SupportApiTest.php`):** 16 passed, 0 failed (59 assertions)
   - `✓ guest can create conversation and send messages`
   - `✓ authenticated customer conversation lifecycle`
   - `✓ customer isolation blocks cross access`
@@ -106,10 +128,17 @@ The following REST API routes were implemented under the `/api/v1/support/` pref
   - `✓ oversized message is rejected gracefully`
   - `✓ conversation updates polling`
   - `✓ action execution revalidates server policy`
+  - `✓ wrong guest token cannot access guest conversation (404)`
+  - `✓ authenticated user cannot claim guest conversation without token (404, remains unlinked)`
+  - `✓ authenticated user with valid guest token may explicitly link (200, links to User A)`
+  - `✓ authenticated user b cannot claim user a linked conversation (404)`
+  - `✓ route action cannot be overridden by body tool name (422)`
+  - `✓ route action is the authority and evaluates policy correctly`
+  - `✓ unknown route action fails closed (404)`
 
 ---
 
-## 5. Non-Destructive Invariant Confirmation
+## 6. Non-Destructive Invariant Confirmation
 
 - [x] Legacy chat controllers preserved (`ChatController.php`, `AdminChatController.php`, `ChatService.php`).
 - [x] Legacy chat models preserved (`ChatConversation.php`, `ChatMessage.php`).
@@ -119,4 +148,5 @@ The following REST API routes were implemented under the `/api/v1/support/` pref
 
 ---
 
-**STOP**: Phase 4 is complete. Awaiting user review and authorization before proceeding to Phase 5.
+**Phase 4 Security Hardening: COMPLETE**  
+Awaiting explicit review and authorization before proceeding to Phase 5.

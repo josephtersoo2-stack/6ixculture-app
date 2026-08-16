@@ -53,6 +53,22 @@ class SupportConversationController extends Controller
 
         // Check if there is an active ongoing conversation to resume
         if ($customerId) {
+            if ($guestToken) {
+                $guestConv = SupportConversation::where('guest_session_id', $guestToken)
+                    ->whereNull('customer_id')
+                    ->whereIn('status', [ConversationStatus::AI_ACTIVE, ConversationStatus::QUEUED, ConversationStatus::HUMAN_ACTIVE])
+                    ->latest()
+                    ->first();
+
+                if ($guestConv) {
+                    $guestConv->update(['customer_id' => $customerId]);
+                    return response()->json([
+                        'data' => new SupportConversationDetailResource($guestConv->fresh()),
+                        'resumed' => true,
+                    ], 200);
+                }
+            }
+
             $existing = SupportConversation::where('customer_id', $customerId)
                 ->whereIn('status', [ConversationStatus::AI_ACTIVE, ConversationStatus::QUEUED, ConversationStatus::HUMAN_ACTIVE])
                 ->latest()
@@ -66,6 +82,7 @@ class SupportConversationController extends Controller
             }
         } elseif ($guestToken) {
             $existing = SupportConversation::where('guest_session_id', $guestToken)
+                ->whereNull('customer_id')
                 ->whereIn('status', [ConversationStatus::AI_ACTIVE, ConversationStatus::QUEUED, ConversationStatus::HUMAN_ACTIVE])
                 ->latest()
                 ->first();
@@ -319,7 +336,32 @@ class SupportConversationController extends Controller
             return $this->errorNotFound();
         }
 
-        $toolName = $request->input('tool_name');
+        // Route action is the authoritative capability selector
+        $toolName = $action;
+
+        // If request body contains a tool_name assertion, enforce exact match with route action
+        if ($request->filled('tool_name') && $request->input('tool_name') !== $action) {
+            return response()->json([
+                'error' => [
+                    'code' => 'ACTION_MISMATCH',
+                    'message' => 'The tool_name in the request body does not match the URL action parameter.',
+                ]
+            ], 422);
+        }
+
+        // Verify action exists in either ToolRegistry or database tool catalog
+        $tool = $this->toolRegistry->get($toolName);
+        $hasDbTool = \App\Support\Models\SupportAITool::active()->where('key', $toolName)->exists();
+
+        if (!$tool && !$hasDbTool) {
+            return response()->json([
+                'error' => [
+                    'code' => 'TOOL_NOT_FOUND',
+                    'message' => 'Requested action capability is not registered.',
+                ]
+            ], 404);
+        }
+
         $args = $request->input('arguments', []);
         $confirmed = $request->boolean('confirmed');
 
@@ -333,6 +375,19 @@ class SupportConversationController extends Controller
         }
 
         $toolCall = new ToolCallDTO((string)Str::uuid(), $toolName, $args);
+
+        // Validate argument schema if executable definition is present
+        if ($tool) {
+            $valErr = $this->toolRegistry->validate($toolCall, $tool);
+            if ($valErr) {
+                return response()->json([
+                    'error' => [
+                        'code' => 'INVALID_ARGUMENTS',
+                        'message' => $valErr,
+                    ]
+                ], 422);
+            }
+        }
 
         // Revalidate policy on the server
         $policyResult = $this->policyEngine->evaluateToolCall($toolCall, $conv);
@@ -367,7 +422,6 @@ class SupportConversationController extends Controller
             ], 200);
         }
 
-        $tool = $this->toolRegistry->get($toolName);
         if (!$tool) {
             return response()->json([
                 'error' => [
@@ -375,16 +429,6 @@ class SupportConversationController extends Controller
                     'message' => 'Requested tool is not registered.',
                 ]
             ], 404);
-        }
-
-        $valErr = $this->toolRegistry->validate($toolCall, $tool);
-        if ($valErr) {
-            return response()->json([
-                'error' => [
-                    'code' => 'INVALID_ARGUMENTS',
-                    'message' => $valErr,
-                ]
-            ], 422);
         }
 
         $result = $tool->execute($toolCall, $conv);
@@ -431,26 +475,28 @@ class SupportConversationController extends Controller
 
         // If conversation belongs to an authenticated customer
         if ($conversation->customer_id) {
-            if ($conversation->customer_id !== $customerId) {
-                return null; // Deny access across customers
+            if (!$customerId || (int)$conversation->customer_id !== (int)$customerId) {
+                return null; // Deny access across customers or if unauthenticated
             }
             return $conversation;
         }
 
-        // If conversation is a guest session
+        // If conversation is a guest session (unlinked)
         if ($conversation->guest_session_id) {
-            if ($guestToken && $conversation->guest_session_id === $guestToken) {
-                return $conversation;
+            // Require valid guest-token proof
+            if (!$guestToken || $conversation->guest_session_id !== $guestToken) {
+                return null;
             }
-            // If the guest has since authenticated, safely associate the conversation
+
+            // If user is authenticated AND supplied valid guest token proof, link conversation
             if ($customerId) {
                 $conversation->update(['customer_id' => $customerId]);
-                return $conversation;
             }
-            return null;
+
+            return $conversation;
         }
 
-        return $conversation;
+        return null;
     }
 
     protected function errorNotFound(): JsonResponse

@@ -14,8 +14,8 @@ class ExecuteActionRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'tool_name' => ['required', 'string', 'max:64'],
-            'arguments' => ['required', 'array'],
+            'tool_name' => ['nullable', 'string', 'max:64'],
+            'arguments' => ['nullable', 'array'],
             'confirmed' => ['required', 'boolean'],
             'guest_token' => ['nullable', 'string', 'max:64'],
         ];
