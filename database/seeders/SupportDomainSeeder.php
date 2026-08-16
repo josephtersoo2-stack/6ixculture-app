@@ -16,6 +16,7 @@ class SupportDomainSeeder extends Seeder
         $this->seedDepartments();
         $this->seedPolicies();
         $this->seedAiTools();
+        $this->seedKnowledgeArticles();
     }
 
     private function seedDepartments(): void
@@ -320,6 +321,89 @@ class SupportDomainSeeder extends Seeder
                     'input_schema' => $tool['input_schema'],
                     'is_active' => true,
                 ]
+            );
+        }
+    }
+
+    private function seedKnowledgeArticles(): void
+    {
+        $articles = [
+            [
+                'title' => '7-Day Return and Exchange Policy',
+                'slug' => 'return-exchange-policy',
+                'category' => 'Returns & Refunds',
+                'language' => 'en',
+                'status' => 'published',
+                'version' => 1,
+                'published_at' => now(),
+                'content' => "6ixCulture 7-Day Return and Exchange Policy: Customers may request a return or size exchange within 7 calendar days of delivery. Items must be unworn, unwashed, and in their original packaging with all garment tags attached. Clearance items, swimwear, and intimates are final sale and non-refundable. Size exchanges are processed free of charge upon physical inspection.",
+            ],
+            [
+                'title' => 'Eto Idapada ati Pasiparo 6ixCulture',
+                'slug' => 'return-exchange-policy',
+                'category' => 'Returns & Refunds',
+                'language' => 'yo',
+                'status' => 'published',
+                'version' => 1,
+                'published_at' => now(),
+                'content' => "Eto Idapada ati Pasiparo 6ixCulture: O le beere fun idapada tabi pasiparo iwọn laarin ojo meje (7 days) ti o ba gba eru re. Eru na gbodo wa ni ipo tuntun, ti a ko tii wo tabi fo, pelu gbogbo ami (tags) atilẹba. A ko le da awon aso ti a ta ni idinku pataki tabi aso abenu pada.",
+            ],
+            [
+                'title' => 'Iwu Nloghachi na Ngbanwe nke 6ixCulture',
+                'slug' => 'return-exchange-policy',
+                'category' => 'Returns & Refunds',
+                'language' => 'ig',
+                'status' => 'published',
+                'version' => 1,
+                'published_at' => now(),
+                'content' => "Iwu Nloghachi na Ngbanwe nke 6ixCulture: Ndị ahịa nwere ike ịrịọ nloghachi ma ọ bụ ngbanwe n'ime ụbọchị asaa (7 days) mgbe anatarachara ngwaahịa. Ngwaahịa ga-adị ọhụrụ, nke a na-eyighị ma nwee akara (tags) mbụ ya niile.",
+            ],
+            [
+                'title' => 'Dokar Maida Kayan 6ixCulture',
+                'slug' => 'return-exchange-policy',
+                'category' => 'Returns & Refunds',
+                'language' => 'ha',
+                'status' => 'published',
+                'version' => 1,
+                'published_at' => now(),
+                'content' => "Dokar Maida Kayan 6ixCulture: Abokan ciniki na iya neman mayar da kaya ko canza girma a cikin kwanaki bakwai (7 days) da karbar kaya. Kayan dole ne su kasance a cikin asalin kunshin su tare da duk alamun su.",
+            ],
+            [
+                'title' => 'Nationwide Shipping & Delivery Timelines',
+                'slug' => 'shipping-delivery-guide',
+                'category' => 'Shipping',
+                'language' => 'en',
+                'status' => 'published',
+                'version' => 1,
+                'published_at' => now(),
+                'content' => "Nationwide Shipping Guidelines: We deliver to all 36 states and the FCT in Nigeria. Express Shipping (Lagos & Abuja) delivers within 24 to 48 business hours. Standard nationwide delivery across other states takes 2 to 5 business days. Once your order is dispatched, a real-time tracking code (e.g. 6IX-XXXXXX) is generated and sent via SMS and email.",
+            ],
+            [
+                'title' => 'Streetwear Sizing and Care Guide',
+                'slug' => 'sizing-care-guide',
+                'category' => 'Products',
+                'language' => 'en',
+                'status' => 'published',
+                'version' => 1,
+                'published_at' => now(),
+                'content' => "Streetwear Sizing & Garment Care: 6ixCulture garments feature a contemporary relaxed boxy streetwear fit. We recommend selecting your true size for a standard oversized streetwear aesthetic or sizing down if you prefer a slimmer tailored fit. For longevity, machine wash cold inside out with similar colors and hang dry away from direct sunlight.",
+            ],
+            [
+                'title' => 'Accepted Payment Methods and Wallet Credits',
+                'slug' => 'payment-wallet-guide',
+                'category' => 'Payments',
+                'language' => 'en',
+                'status' => 'published',
+                'version' => 1,
+                'published_at' => now(),
+                'content' => "Accepted Payment Methods: We accept all major Nigerian debit cards (Mastercard, Visa, Verve), Paystack secure payments, direct instant bank transfers, and 6ixCulture Store Wallet credits. All transactions are encrypted and processed with 3D Secure verification.",
+            ],
+        ];
+
+        foreach ($articles as $art) {
+            \App\Support\Models\SupportKnowledgeArticle::updateOrCreate(
+                ['slug' => $art['slug'], 'language' => $art['language']],
+                $art
             );
         }
     }

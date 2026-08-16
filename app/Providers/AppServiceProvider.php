@@ -20,6 +20,10 @@ class AppServiceProvider extends ServiceProvider
             \App\Support\Contracts\PolicyEngineInterface::class,
             \App\Support\Policies\SupportActionPolicyEngine::class
         );
+        $this->app->bind(
+            \App\Support\Contracts\KnowledgeRepositoryInterface::class,
+            \App\Support\Services\SupportKnowledgeRepository::class
+        );
     }
 
     /**

@@ -149,7 +149,7 @@ return new class extends Migration
             Schema::create('support_knowledge_articles', function (Blueprint $table) {
                 $table->id();
                 $table->string('title', 255);
-                $table->string('slug', 255)->unique();
+                $table->string('slug', 255)->index();
                 $table->string('category', 50)->index();
                 $table->string('language', 10)->default('en')->index();
                 $table->longText('content');
@@ -161,6 +161,8 @@ return new class extends Migration
                 $table->unsignedInteger('view_count')->default(0);
                 $table->json('metadata')->nullable();
                 $table->timestamps();
+
+                $table->unique(['slug', 'language']);
             });
         }
 
