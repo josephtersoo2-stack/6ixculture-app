@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Str;
 
 class SupportConversation extends Model
@@ -100,6 +101,11 @@ class SupportConversation extends Model
     public function tickets(): HasMany
     {
         return $this->hasMany(SupportTicket::class, 'conversation_id');
+    }
+
+    public function ticket(): HasOne
+    {
+        return $this->hasOne(SupportTicket::class, 'conversation_id')->latestOfMany();
     }
 
     public function assignments(): HasMany

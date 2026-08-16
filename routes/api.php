@@ -983,5 +983,28 @@ Route::prefix('v1/support')->name('v1.support.')->middleware(['installed', 'apiK
     Route::post('/conversations/{conversation}/request-human', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'requestHuman']);
     Route::post('/conversations/{conversation}/resolve', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'resolve']);
     Route::post('/conversations/{conversation}/actions/{action}', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'executeAction']);
+
+    /*
+    |--------------------------------------------------------------------------
+    | Agent Human Support Workspace Routes (Phase 5)
+    |--------------------------------------------------------------------------
+    */
+    Route::prefix('agent')->name('agent.')->middleware(['auth:sanctum'])->group(function () {
+        Route::get('/conversations', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'index']);
+        Route::get('/conversations/{conversation}', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'show']);
+        Route::post('/conversations/{conversation}/assign', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'assign']);
+        Route::post('/conversations/{conversation}/reply', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'reply']);
+        Route::post('/conversations/{conversation}/notes', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'storeNote']);
+        Route::patch('/conversations/{conversation}/status', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'updateStatus']);
+        Route::patch('/conversations/{conversation}/priority', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'updatePriority']);
+        Route::patch('/conversations/{conversation}/department', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'updateDepartment']);
+        Route::get('/conversations/{conversation}/customer', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'customer360']);
+        Route::get('/conversations/{conversation}/orders', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'orders']);
+        Route::get('/conversations/{conversation}/ticket', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'ticket']);
+        Route::post('/conversations/{conversation}/summarize', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'summarize']);
+        Route::get('/departments', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'departments']);
+        Route::get('/agents', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'agents']);
+    });
 });
+
 

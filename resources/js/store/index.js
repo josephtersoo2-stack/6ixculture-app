@@ -53,6 +53,7 @@ import { frontendWishlist } from "./modules/frontend/frontendWishlist";
 import { globalState } from "./modules/frontend/globalState";
 import { frontendSocialLogin } from "./modules/frontend/frontendSocialLogin";
 import { frontendSupport } from "./modules/frontend/frontendSupport";
+import adminSupport from "./modules/adminSupport";
 import { language } from "./modules/language";
 import { license } from "./modules/license";
 import { mail } from "./modules/mail";
@@ -198,6 +199,7 @@ export default new createStore({
         frontendCoupon,
         frontendSocialLogin,
         frontendSupport,
+        adminSupport,
         stock,
         shippingSetup,
         orderArea,

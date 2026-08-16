@@ -53,6 +53,11 @@ class SupportMessage extends Model
         return $this->belongsTo(User::class, 'sender_id');
     }
 
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'sender_id');
+    }
+
     public function replyTo(): BelongsTo
     {
         return $this->belongsTo(SupportMessage::class, 'reply_to_id');
