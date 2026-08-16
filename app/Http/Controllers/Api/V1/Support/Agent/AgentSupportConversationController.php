@@ -241,13 +241,19 @@ class AgentSupportConversationController extends Controller
         }
 
         $assigneeName = $newAgentId ? (User::find($newAgentId)?->name ?: "Agent #{$newAgentId}") : 'Unassigned';
-        SupportMessage::create([
+        $assignMsg = SupportMessage::create([
             'conversation_id' => $conv->id,
             'sender_type' => SenderType::SYSTEM,
             'message_type' => MessageType::SYSTEM,
             'content' => "Conversation assigned to {$assigneeName} by {$user->name}.",
             'is_internal' => false,
         ]);
+
+        try {
+            broadcast(new \App\Support\Events\SupportMessageCreated($assignMsg));
+            broadcast(new \App\Support\Events\SupportConversationUpdated($conv->fresh(), 'assigned'));
+            broadcast(new \App\Support\Events\SupportQueueUpdated($conv->fresh(), 'assigned'));
+        } catch (\Throwable $e) {}
 
         SupportAuditLog::log([
             'actor_type' => 'agent',
@@ -300,7 +306,7 @@ class AgentSupportConversationController extends Controller
             'resolved_at' => $resolveAfter ? now() : null,
         ]);
 
-        SupportMessage::create([
+        $replyMsg = SupportMessage::create([
             'conversation_id' => $conv->id,
             'sender_type' => SenderType::AGENT,
             'sender_id' => $user->id,
@@ -309,6 +315,11 @@ class AgentSupportConversationController extends Controller
             'structured_payload' => $request->input('attachments') ? ['attachments' => $request->input('attachments')] : null,
             'is_internal' => false,
         ]);
+
+        try {
+            broadcast(new \App\Support\Events\SupportMessageCreated($replyMsg));
+            broadcast(new \App\Support\Events\SupportConversationUpdated($conv->fresh(), 'agent_reply'));
+        } catch (\Throwable $e) {}
 
         return response()->json([
             'data' => new AgentConversationDetailResource($conv->fresh()),
@@ -335,7 +346,7 @@ class AgentSupportConversationController extends Controller
             return $this->errorForbidden('You are not authorized to add notes to this conversation.');
         }
 
-        SupportMessage::create([
+        $noteMsg = SupportMessage::create([
             'conversation_id' => $conv->id,
             'sender_type' => SenderType::AGENT,
             'sender_id' => $user->id,
@@ -343,6 +354,10 @@ class AgentSupportConversationController extends Controller
             'content' => trim($request->input('content')),
             'is_internal' => true,
         ]);
+
+        try {
+            broadcast(new \App\Support\Events\SupportMessageCreated($noteMsg));
+        } catch (\Throwable $e) {}
 
         return response()->json([
             'data' => new AgentConversationDetailResource($conv->fresh()),
@@ -377,13 +392,19 @@ class AgentSupportConversationController extends Controller
             'resolved_at' => $resolvedAt,
         ]);
 
-        SupportMessage::create([
+        $statusMsg = SupportMessage::create([
             'conversation_id' => $conv->id,
             'sender_type' => SenderType::SYSTEM,
             'message_type' => MessageType::SYSTEM,
             'content' => "Status changed to '{$newStatus->label()}' by {$user->name}.",
             'is_internal' => false,
         ]);
+
+        try {
+            broadcast(new \App\Support\Events\SupportMessageCreated($statusMsg));
+            broadcast(new \App\Support\Events\SupportConversationUpdated($conv->fresh(), 'status_changed'));
+            broadcast(new \App\Support\Events\SupportQueueUpdated($conv->fresh(), 'status_changed'));
+        } catch (\Throwable $e) {}
 
         return response()->json([
             'data' => new AgentConversationDetailResource($conv->fresh()),
@@ -412,6 +433,10 @@ class AgentSupportConversationController extends Controller
 
         $newPriority = SupportPriority::from($request->input('priority'));
         $conv->update(['priority' => $newPriority]);
+
+        try {
+            broadcast(new \App\Support\Events\SupportConversationUpdated($conv->fresh(), 'priority_changed'));
+        } catch (\Throwable $e) {}
 
         return response()->json([
             'data' => new AgentConversationDetailResource($conv->fresh()),
@@ -476,13 +501,19 @@ class AgentSupportConversationController extends Controller
 
         $conv->update($updates);
 
-        SupportMessage::create([
+        $transferMsg = SupportMessage::create([
             'conversation_id' => $conv->id,
             'sender_type' => SenderType::SYSTEM,
             'message_type' => MessageType::SYSTEM,
             'content' => "Department transferred to {$dept->name} by {$user->name}.",
             'is_internal' => false,
         ]);
+
+        try {
+            broadcast(new \App\Support\Events\SupportMessageCreated($transferMsg));
+            broadcast(new \App\Support\Events\SupportConversationUpdated($conv->fresh(), 'department_transferred'));
+            broadcast(new \App\Support\Events\SupportQueueUpdated($conv->fresh(), 'department_transferred'));
+        } catch (\Throwable $e) {}
 
         SupportAuditLog::log([
             'actor_type' => 'agent',
@@ -768,6 +799,41 @@ class AgentSupportConversationController extends Controller
                     'email' => $agent->email,
                 ];
             }),
+        ], 200);
+    }
+
+    /**
+     * Update agent availability presence and broadcast to presence channel.
+     */
+    public function updatePresence(Request $request): JsonResponse
+    {
+        $user = $this->authorizeAgent($request);
+        if (!$user) {
+            return $this->errorForbidden();
+        }
+
+        $status = $request->input('status', 'online');
+        $availability = $request->input('availability', 'available');
+
+        $profile = SupportAgentProfile::where('user_id', $user->id)->first();
+        if ($profile) {
+            $profile->update([
+                'status' => $status,
+                'availability' => $availability,
+            ]);
+        }
+
+        try {
+            broadcast(new \App\Support\Events\SupportAgentPresenceChanged($user, $status, $availability));
+        } catch (\Throwable $e) {}
+
+        return response()->json([
+            'data' => [
+                'agent_id' => $user->id,
+                'status' => $status,
+                'availability' => $availability,
+            ],
+            'message' => 'Agent presence updated.',
         ], 200);
     }
 

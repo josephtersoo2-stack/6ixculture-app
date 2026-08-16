@@ -986,7 +986,20 @@ Route::prefix('v1/support')->name('v1.support.')->middleware(['installed', 'apiK
 
     /*
     |--------------------------------------------------------------------------
-    | Agent Human Support Workspace Routes (Phase 5)
+    | Voice Interface Routes (Phase 6)
+    |--------------------------------------------------------------------------
+    */
+    Route::prefix('conversations/{conversation}/voice')->name('voice.')->group(function () {
+        Route::post('/sessions', [\App\Http\Controllers\Api\V1\Support\Voice\SupportVoiceController::class, 'startSession']);
+        Route::get('/sessions/{session}', [\App\Http\Controllers\Api\V1\Support\Voice\SupportVoiceController::class, 'getSession']);
+        Route::post('/sessions/{session}/end', [\App\Http\Controllers\Api\V1\Support\Voice\SupportVoiceController::class, 'endSession']);
+        Route::post('/process', [\App\Http\Controllers\Api\V1\Support\Voice\SupportVoiceController::class, 'process']);
+        Route::post('/interrupt', [\App\Http\Controllers\Api\V1\Support\Voice\SupportVoiceController::class, 'interrupt']);
+    });
+
+    /*
+    |--------------------------------------------------------------------------
+    | Agent Human Support Workspace Routes (Phase 5 & 6)
     |--------------------------------------------------------------------------
     */
     Route::prefix('agent')->name('agent.')->middleware(['auth:sanctum'])->group(function () {
@@ -1004,6 +1017,7 @@ Route::prefix('v1/support')->name('v1.support.')->middleware(['installed', 'apiK
         Route::post('/conversations/{conversation}/summarize', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'summarize']);
         Route::get('/departments', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'departments']);
         Route::get('/agents', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'agents']);
+        Route::post('/presence', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'updatePresence']);
     });
 });
 

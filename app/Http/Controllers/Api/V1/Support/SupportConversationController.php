@@ -209,6 +209,14 @@ class SupportConversationController extends Controller
         // Execute orchestrator loop
         $responseDTO = $this->orchestrator->handle($conv, $inboundDTO);
 
+        // Dispatch realtime message event
+        $latestMessage = $conv->messages()->latest('id')->first();
+        if ($latestMessage) {
+            try {
+                broadcast(new \App\Support\Events\SupportMessageCreated($latestMessage));
+            } catch (\Throwable $e) {}
+        }
+
         return response()->json([
             'data' => new SupportConversationDetailResource($conv->fresh()),
             'response' => [
@@ -250,7 +258,7 @@ class SupportConversationController extends Controller
             return $this->errorNotFound();
         }
 
-        $afterId = (int)$request->query('after_id', 0);
+        $afterId = (int)$request->input('after_id', 0);
 
         $newMessages = $conv->messages()
             ->customerVisible()
@@ -283,7 +291,7 @@ class SupportConversationController extends Controller
             'mode' => ConversationMode::HYBRID,
         ]);
 
-        SupportMessage::create([
+        $escalationMsg = SupportMessage::create([
             'conversation_id' => $conv->id,
             'sender_type' => SenderType::SYSTEM,
             'message_type' => MessageType::ESCALATION,
@@ -291,6 +299,12 @@ class SupportConversationController extends Controller
             'structured_payload' => ['status' => 'queued'],
             'is_internal' => false,
         ]);
+
+        try {
+            broadcast(new \App\Support\Events\SupportMessageCreated($escalationMsg));
+            broadcast(new \App\Support\Events\SupportConversationUpdated($conv, 'escalated'));
+            broadcast(new \App\Support\Events\SupportQueueUpdated($conv, 'escalated'));
+        } catch (\Throwable $e) {}
 
         return response()->json([
             'data' => new SupportConversationDetailResource($conv->fresh()),
@@ -312,13 +326,18 @@ class SupportConversationController extends Controller
             'status' => ConversationStatus::RESOLVED,
         ]);
 
-        SupportMessage::create([
+        $resolvedMsg = SupportMessage::create([
             'conversation_id' => $conv->id,
             'sender_type' => SenderType::SYSTEM,
             'message_type' => MessageType::SYSTEM,
             'content' => 'Conversation has been marked as resolved.',
             'is_internal' => false,
         ]);
+
+        try {
+            broadcast(new \App\Support\Events\SupportMessageCreated($resolvedMsg));
+            broadcast(new \App\Support\Events\SupportConversationUpdated($conv, 'resolved'));
+        } catch (\Throwable $e) {}
 
         return response()->json([
             'data' => new SupportConversationDetailResource($conv->fresh()),

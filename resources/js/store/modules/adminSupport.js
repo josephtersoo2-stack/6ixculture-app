@@ -275,7 +275,35 @@ const actions = {
             });
     },
 
+    updatePresence({ commit }, { status, availability }) {
+        return axios.post('/api/v1/support/agent/presence', { status, availability })
+            .then((res) => {
+                return res;
+            });
+    },
+
+    initRealtimeQueue({ state, dispatch, commit }) {
+        if (typeof window === 'undefined' || !window.Echo) return;
+
+        try {
+            window.Echo.private('support.agent.queue')
+                .listen('.support.queue.updated', () => {
+                    dispatch('fetchQueue', state.pagination.current_page);
+                })
+                .listen('.support.agent.presence.changed', (event) => {
+                    if (event && event.agent_id) {
+                        const agentIndex = state.agents.findIndex(a => a.id === event.agent_id);
+                        if (agentIndex !== -1) {
+                            state.agents[agentIndex].status = event.status;
+                            state.agents[agentIndex].availability = event.availability;
+                        }
+                    }
+                });
+        } catch (e) {}
+    },
+
     startQueuePolling({ state, dispatch, commit }) {
+        dispatch('initRealtimeQueue');
         if (state.pollingTimer) clearInterval(state.pollingTimer);
 
         const timer = setInterval(() => {
