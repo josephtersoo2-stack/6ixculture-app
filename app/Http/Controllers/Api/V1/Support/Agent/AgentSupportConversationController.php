@@ -17,7 +17,6 @@ use App\Models\Order;
 use App\Models\User;
 use App\Support\Contracts\AiOrchestratorInterface;
 use App\Support\Contracts\PolicyEngineInterface;
-use App\Support\DTOs\ChatMessageDTO;
 use App\Support\Enums\ConversationMode;
 use App\Support\Enums\ConversationStatus;
 use App\Support\Enums\MessageType;
@@ -25,10 +24,13 @@ use App\Support\Enums\SenderType;
 use App\Support\Enums\SupportPriority;
 use App\Support\Models\SupportAgentProfile;
 use App\Support\Models\SupportAssignment;
+use App\Support\Models\SupportAuditLog;
 use App\Support\Models\SupportConversation;
 use App\Support\Models\SupportDepartment;
 use App\Support\Models\SupportMessage;
 use App\Support\Models\SupportTicket;
+use App\Support\Services\AiProviderFactory;
+use App\Support\Services\SupportContextAssembler;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -37,17 +39,20 @@ class AgentSupportConversationController extends Controller
 {
     protected AiOrchestratorInterface $orchestrator;
     protected PolicyEngineInterface $policyEngine;
+    protected SupportContextAssembler $contextAssembler;
 
     public function __construct(
         AiOrchestratorInterface $orchestrator,
-        PolicyEngineInterface $policyEngine
+        PolicyEngineInterface $policyEngine,
+        ?SupportContextAssembler $contextAssembler = null
     ) {
         $this->orchestrator = $orchestrator;
         $this->policyEngine = $policyEngine;
+        $this->contextAssembler = $contextAssembler ?? new SupportContextAssembler();
     }
 
     /**
-     * List support queue with filters.
+     * List support queue with authorization scoping and filters.
      */
     public function index(AgentConversationIndexRequest $request): JsonResponse
     {
@@ -58,22 +63,28 @@ class AgentSupportConversationController extends Controller
 
         $query = SupportConversation::with(['customer', 'assignedAgent', 'department', 'ticket']);
 
-        // Status Filter
+        // 1. Enforce Authorization Scope FIRST
+        if (!$this->isElevatedAgent($user)) {
+            $allowedDeptIds = $this->getAgentDepartmentIds($user) ?? [];
+            $query->where(function ($scoped) use ($user, $allowedDeptIds) {
+                $scoped->where('assigned_agent_id', $user->id)
+                       ->orWhereIn('department_id', $allowedDeptIds);
+            });
+        }
+
+        // 2. Query Filters within the authorized scope
         if ($request->filled('status') && $request->input('status') !== 'all') {
             $query->where('status', $request->input('status'));
         }
 
-        // Department Filter
         if ($request->filled('department_id')) {
             $query->where('department_id', (int)$request->input('department_id'));
         }
 
-        // Priority Filter
         if ($request->filled('priority')) {
             $query->where('priority', $request->input('priority'));
         }
 
-        // Assigned To Filter
         if ($request->filled('assigned_to')) {
             $assignedTo = $request->input('assigned_to');
             if ($assignedTo === 'me') {
@@ -89,12 +100,10 @@ class AgentSupportConversationController extends Controller
             $query->whereNull('assigned_agent_id');
         }
 
-        // Language Filter
         if ($request->filled('language')) {
             $query->where('language', $request->input('language'));
         }
 
-        // Search Filter
         if ($request->filled('search')) {
             $term = trim($request->input('search'));
             $query->where(function ($q) use ($term) {
@@ -137,13 +146,17 @@ class AgentSupportConversationController extends Controller
             return $this->errorNotFound();
         }
 
+        if (!$this->authorizeConversationAccess($user, $conv)) {
+            return $this->errorForbidden('You are not authorized to view this conversation.');
+        }
+
         return response()->json([
             'data' => new AgentConversationDetailResource($conv),
         ], 200);
     }
 
     /**
-     * Claim or reassign conversation.
+     * Claim or reassign conversation with strict target agent validation.
      */
     public function assign(AssignConversationRequest $request, string $conversation): JsonResponse
     {
@@ -157,13 +170,54 @@ class AgentSupportConversationController extends Controller
             return $this->errorNotFound();
         }
 
+        if (!$this->authorizeConversationAccess($user, $conv)) {
+            return $this->errorForbidden('You are not authorized to assign this conversation.');
+        }
+
         $targetAgentId = $request->input('agent_id');
-        if ($targetAgentId === 'self' || $targetAgentId === 'me') {
+        $newAgentId = null;
+
+        if ($targetAgentId === 'self' || $targetAgentId === 'me' || (is_numeric($targetAgentId) && (int)$targetAgentId === $user->id)) {
             $newAgentId = $user->id;
-        } elseif ($targetAgentId === null || $targetAgentId === 'unassigned') {
+        } elseif ($targetAgentId === null || $targetAgentId === 'unassigned' || $targetAgentId === '') {
             $newAgentId = null;
-        } else {
-            $newAgentId = (int)$targetAgentId;
+        } elseif (is_numeric($targetAgentId)) {
+            $targetUser = User::find((int)$targetAgentId);
+            if (!$targetUser) {
+                return response()->json([
+                    'error' => [
+                        'code' => 'INVALID_ASSIGNMENT_TARGET',
+                        'message' => 'The target agent does not exist.',
+                    ]
+                ], 422);
+            }
+
+            // Target must have active agent profile or elevated staff role (cannot be normal customer)
+            $targetProfile = SupportAgentProfile::where('user_id', $targetUser->id)->first();
+            $targetIsElevated = $this->isElevatedAgent($targetUser);
+            if (!$targetProfile && !$targetIsElevated) {
+                return response()->json([
+                    'error' => [
+                        'code' => 'INVALID_ASSIGNMENT_TARGET',
+                        'message' => 'Assignment target must be an authorized support agent.',
+                    ]
+                ], 422);
+            }
+
+            // If target is not elevated and conversation has a department, verify target agent is attached to that department
+            if (!$targetIsElevated && $conv->department_id) {
+                $targetDeptIds = $this->getAgentDepartmentIds($targetUser) ?? [];
+                if (!in_array($conv->department_id, $targetDeptIds)) {
+                    return response()->json([
+                        'error' => [
+                            'code' => 'UNAUTHORIZED_ASSIGNMENT_TARGET',
+                            'message' => 'Target agent is not authorized for this conversation department.',
+                        ]
+                    ], 422);
+                }
+            }
+
+            $newAgentId = $targetUser->id;
         }
 
         $previousAgentId = $conv->assigned_agent_id;
@@ -176,7 +230,7 @@ class AgentSupportConversationController extends Controller
             'mode' => $newAgentId ? ConversationMode::HUMAN : $conv->mode,
         ]);
 
-        // Record assignment history in SupportAssignment
+        // Record in SupportAssignment
         if ($newAgentId) {
             SupportAssignment::create([
                 'conversation_id' => $conv->id,
@@ -201,6 +255,19 @@ class AgentSupportConversationController extends Controller
             'is_internal' => false,
         ]);
 
+        SupportAuditLog::log([
+            'actor_type' => 'agent',
+            'actor_id' => $user->id,
+            'customer_id' => $conv->customer_id,
+            'conversation_id' => $conv->id,
+            'action' => 'ASSIGN_CONVERSATION',
+            'resource_type' => 'support_conversation',
+            'resource_id' => (string)$conv->id,
+            'authorization_result' => 'ALLOW',
+            'before_data' => ['assigned_agent_id' => $previousAgentId],
+            'after_data' => ['assigned_agent_id' => $newAgentId],
+        ]);
+
         return response()->json([
             'data' => new AgentConversationDetailResource($conv->fresh()),
             'message' => 'Assignment updated successfully.',
@@ -222,6 +289,10 @@ class AgentSupportConversationController extends Controller
             return $this->errorNotFound();
         }
 
+        if (!$this->authorizeConversationAccess($user, $conv)) {
+            return $this->errorForbidden('You are not authorized to reply to this conversation.');
+        }
+
         $resolveAfter = $request->boolean('resolve_after_reply');
         $newStatus = $resolveAfter ? ConversationStatus::RESOLVED : ConversationStatus::AWAITING_CUSTOMER;
 
@@ -235,7 +306,7 @@ class AgentSupportConversationController extends Controller
             'resolved_at' => $resolveAfter ? now() : null,
         ]);
 
-        $message = SupportMessage::create([
+        SupportMessage::create([
             'conversation_id' => $conv->id,
             'sender_type' => SenderType::AGENT,
             'sender_id' => $user->id,
@@ -266,6 +337,10 @@ class AgentSupportConversationController extends Controller
             return $this->errorNotFound();
         }
 
+        if (!$this->authorizeConversationAccess($user, $conv)) {
+            return $this->errorForbidden('You are not authorized to add notes to this conversation.');
+        }
+
         SupportMessage::create([
             'conversation_id' => $conv->id,
             'sender_type' => SenderType::AGENT,
@@ -294,6 +369,10 @@ class AgentSupportConversationController extends Controller
         $conv = SupportConversation::where('public_id', $conversation)->first();
         if (!$conv) {
             return $this->errorNotFound();
+        }
+
+        if (!$this->authorizeConversationAccess($user, $conv)) {
+            return $this->errorForbidden('You are not authorized to update this conversation status.');
         }
 
         $newStatus = ConversationStatus::from($request->input('status'));
@@ -333,6 +412,10 @@ class AgentSupportConversationController extends Controller
             return $this->errorNotFound();
         }
 
+        if (!$this->authorizeConversationAccess($user, $conv)) {
+            return $this->errorForbidden('You are not authorized to update this conversation priority.');
+        }
+
         $newPriority = SupportPriority::from($request->input('priority'));
         $conv->update(['priority' => $newPriority]);
 
@@ -357,8 +440,39 @@ class AgentSupportConversationController extends Controller
             return $this->errorNotFound();
         }
 
-        $dept = SupportDepartment::findOrFail($request->input('department_id'));
-        $conv->update(['department_id' => $dept->id]);
+        if (!$this->authorizeConversationAccess($user, $conv)) {
+            return $this->errorForbidden('You are not authorized to transfer this conversation.');
+        }
+
+        $dept = SupportDepartment::find($request->input('department_id'));
+        if (!$dept || !$dept->is_active) {
+            return response()->json([
+                'error' => [
+                    'code' => 'INVALID_DEPARTMENT',
+                    'message' => 'Target department does not exist or is inactive.',
+                ]
+            ], 422);
+        }
+
+        $previousDeptId = $conv->department_id;
+        $updates = ['department_id' => $dept->id];
+
+        // If assigned agent is not authorized for the new department (and not elevated), unassign so new department can claim
+        if ($conv->assigned_agent_id) {
+            $assignedUser = User::find($conv->assigned_agent_id);
+            if ($assignedUser && !$this->isElevatedAgent($assignedUser)) {
+                $assignedDeptIds = $this->getAgentDepartmentIds($assignedUser);
+                if (!in_array($dept->id, $assignedDeptIds ?? [])) {
+                    $updates['assigned_agent_id'] = null;
+                    $updates['status'] = ConversationStatus::QUEUED;
+                    SupportAssignment::where('conversation_id', $conv->id)
+                        ->whereNull('unassigned_at')
+                        ->update(['unassigned_at' => now()]);
+                }
+            }
+        }
+
+        $conv->update($updates);
 
         SupportMessage::create([
             'conversation_id' => $conv->id,
@@ -366,6 +480,19 @@ class AgentSupportConversationController extends Controller
             'message_type' => MessageType::SYSTEM,
             'content' => "Department transferred to {$dept->name} by {$user->name}.",
             'is_internal' => false,
+        ]);
+
+        SupportAuditLog::log([
+            'actor_type' => 'agent',
+            'actor_id' => $user->id,
+            'customer_id' => $conv->customer_id,
+            'conversation_id' => $conv->id,
+            'action' => 'TRANSFER_DEPARTMENT',
+            'resource_type' => 'support_conversation',
+            'resource_id' => (string)$conv->id,
+            'authorization_result' => 'ALLOW',
+            'before_data' => ['department_id' => $previousDeptId],
+            'after_data' => ['department_id' => $dept->id],
         ]);
 
         return response()->json([
@@ -389,6 +516,10 @@ class AgentSupportConversationController extends Controller
             return $this->errorNotFound();
         }
 
+        if (!$this->authorizeConversationAccess($user, $conv)) {
+            return $this->errorForbidden('You are not authorized to view customer details for this conversation.');
+        }
+
         return response()->json([
             'data' => new Customer360Resource($conv->customer),
         ], 200);
@@ -407,6 +538,10 @@ class AgentSupportConversationController extends Controller
         $conv = SupportConversation::where('public_id', $conversation)->first();
         if (!$conv) {
             return $this->errorNotFound();
+        }
+
+        if (!$this->authorizeConversationAccess($user, $conv)) {
+            return $this->errorForbidden('You are not authorized to view customer orders for this conversation.');
         }
 
         if (!$conv->customer_id) {
@@ -455,6 +590,10 @@ class AgentSupportConversationController extends Controller
             return $this->errorNotFound();
         }
 
+        if (!$this->authorizeConversationAccess($user, $conv)) {
+            return $this->errorForbidden('You are not authorized to view ticket details for this conversation.');
+        }
+
         return response()->json([
             'data' => $conv->ticket ? [
                 'id' => $conv->ticket->id,
@@ -469,7 +608,7 @@ class AgentSupportConversationController extends Controller
     }
 
     /**
-     * Generate or refresh AI Summary.
+     * Generate or refresh AI Summary using Support Context Assembler & Provider Abstraction.
      */
     public function summarize(Request $request, string $conversation): JsonResponse
     {
@@ -483,22 +622,76 @@ class AgentSupportConversationController extends Controller
             return $this->errorNotFound();
         }
 
-        $lastMessages = $conv->messages()->orderBy('id', 'desc')->limit(6)->get()->reverse();
-        $summaryPoints = [];
-        foreach ($lastMessages as $m) {
-            $sender = $m->sender_type?->value ?: 'unknown';
-            $summaryPoints[] = "[{$sender}]: " . substr($m->content, 0, 100);
+        if (!$this->authorizeConversationAccess($user, $conv)) {
+            return $this->errorForbidden('You are not authorized to summarize this conversation.');
         }
 
-        $summary = "Summary: Customer inquiry regarding streetwear order and store policies. Conversation active in {$conv->language} language. Mode: {$conv->mode->value}.";
-        $conv->update(['ai_summary' => $summary]);
+        try {
+            // 1. Build secure bounded context via SupportContextAssembler
+            $summaryContext = $this->contextAssembler->assembleForSummarization($conv);
 
-        return response()->json([
-            'data' => [
-                'ai_summary' => $summary,
-            ],
-            'message' => 'AI Summary generated successfully.',
-        ], 200);
+            // 2. Query AI Provider through provider abstraction
+            $provider = AiProviderFactory::make();
+            $response = $provider->chat($summaryContext, []);
+
+            if (!empty($response['error'])) {
+                return response()->json([
+                    'error' => [
+                        'code' => 'AI_SUMMARY_PROVIDER_ERROR',
+                        'message' => $response['error'],
+                    ]
+                ], 502);
+            }
+
+            $summaryText = trim($response['text'] ?? $response['content'] ?? '');
+            if (empty($summaryText)) {
+                $summaryText = "Summary generation returned empty response.";
+            }
+
+            $conv->update(['ai_summary' => $summaryText]);
+
+            SupportAuditLog::log([
+                'actor_type' => 'agent',
+                'actor_id' => $user->id,
+                'customer_id' => $conv->customer_id,
+                'conversation_id' => $conv->id,
+                'action' => 'GENERATE_AI_SUMMARY',
+                'resource_type' => 'support_conversation',
+                'resource_id' => (string)$conv->id,
+                'authorization_result' => 'ALLOW',
+                'metadata' => [
+                    'provider' => $response['provider'] ?? 'unknown',
+                    'model' => $response['model'] ?? 'unknown',
+                    'tokens_used' => $response['tokens_used'] ?? 0,
+                ],
+            ]);
+
+            return response()->json([
+                'data' => [
+                    'ai_summary' => $summaryText,
+                ],
+                'message' => 'AI Summary generated successfully.',
+            ], 200);
+        } catch (\Throwable $e) {
+            SupportAuditLog::log([
+                'actor_type' => 'agent',
+                'actor_id' => $user->id,
+                'customer_id' => $conv->customer_id,
+                'conversation_id' => $conv->id,
+                'action' => 'GENERATE_AI_SUMMARY_FAILED',
+                'resource_type' => 'support_conversation',
+                'resource_id' => (string)$conv->id,
+                'authorization_result' => 'ERROR',
+                'metadata' => ['error' => $e->getMessage()],
+            ]);
+
+            return response()->json([
+                'error' => [
+                    'code' => 'AI_SUMMARY_GENERATION_FAILED',
+                    'message' => 'Failed to generate AI summary. The conversation remains safe and unchanged.',
+                ]
+            ], 500);
+        }
     }
 
     /**
@@ -585,12 +778,71 @@ class AgentSupportConversationController extends Controller
         return null;
     }
 
-    protected function errorForbidden(): JsonResponse
+    /**
+     * Check if user is an elevated support user (Admin or Manager).
+     */
+    protected function isElevatedAgent(User $user): bool
+    {
+        try {
+            if (method_exists($user, 'hasAnyRole') && $user->hasAnyRole(['Admin', 'Manager'])) {
+                return true;
+            }
+            if (method_exists($user, 'can') && ($user->can('manage-support') || $user->can('all_support'))) {
+                return true;
+            }
+        } catch (\Throwable $e) {
+            // fallback
+        }
+
+        return false;
+    }
+
+    /**
+     * Retrieve authorized department IDs for an agent (or null if elevated/all).
+     */
+    protected function getAgentDepartmentIds(User $user): ?array
+    {
+        if ($this->isElevatedAgent($user)) {
+            return null; // All departments permitted
+        }
+
+        $profile = SupportAgentProfile::where('user_id', $user->id)->first();
+        if ($profile) {
+            return $profile->departments()->pluck('support_departments.id')->toArray();
+        }
+
+        return [];
+    }
+
+    /**
+     * Verify whether an authenticated agent is authorized to view or operate on a specific conversation.
+     */
+    protected function authorizeConversationAccess(User $user, SupportConversation $conversation): bool
+    {
+        if ($this->isElevatedAgent($user)) {
+            return true;
+        }
+
+        // Assigned agent always has access
+        if ($conversation->assigned_agent_id === $user->id) {
+            return true;
+        }
+
+        // Check if conversation belongs to one of the agent's authorized departments
+        $allowedDeptIds = $this->getAgentDepartmentIds($user);
+        if ($conversation->department_id && in_array($conversation->department_id, $allowedDeptIds ?? [])) {
+            return true;
+        }
+
+        return false;
+    }
+
+    protected function errorForbidden(string $message = 'Access denied. You do not have permission to perform this support operation.'): JsonResponse
     {
         return response()->json([
             'error' => [
                 'code' => 'SUPPORT_AGENT_FORBIDDEN',
-                'message' => 'Access denied. You do not have permission to access the Support Agent Console.',
+                'message' => $message,
             ]
         ], 403);
     }
@@ -600,7 +852,7 @@ class AgentSupportConversationController extends Controller
         return response()->json([
             'error' => [
                 'code' => 'SUPPORT_CONVERSATION_NOT_FOUND',
-                'message' => 'The requested support conversation was not found or access is denied.',
+                'message' => 'The requested support conversation was not found.',
             ]
         ], 404);
     }

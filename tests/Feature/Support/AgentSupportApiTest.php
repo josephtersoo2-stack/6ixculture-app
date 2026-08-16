@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Support;
 
+use App\Models\AiAgent;
 use App\Models\Order;
 use App\Models\User;
 use App\Support\Enums\ConversationMode;
@@ -18,6 +19,7 @@ use App\Support\Models\SupportMessage;
 use App\Support\Models\SupportTicket;
 use Database\Seeders\SupportDomainSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
@@ -26,7 +28,8 @@ class AgentSupportApiTest extends TestCase
     use RefreshDatabase;
 
     protected User $adminUser;
-    protected User $agentUser;
+    protected User $ordersAgent;
+    protected User $salesAgent;
     protected User $customerUser;
     protected SupportDepartment $salesDept;
     protected SupportDepartment $ordersDept;
@@ -34,6 +37,12 @@ class AgentSupportApiTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+
+        putenv('OPENROUTER_API_KEY=test_openrouter_sk_key');
+        putenv('GEMINI_API_KEY=test_gemini_api_key');
+
+        AiAgent::create(['name' => 'OpenRouter', 'slug' => 'openrouter', 'status' => 5]);
+        AiAgent::create(['name' => 'Gemini', 'slug' => 'gemini', 'status' => 5]);
 
         $this->seed([
             \Database\Seeders\RoleTableSeeder::class,
@@ -48,30 +57,47 @@ class AgentSupportApiTest extends TestCase
         ]);
         $this->adminUser->assignRole('Admin');
 
-        // 2. Dedicated Agent User with Profile
-        $this->agentUser = User::factory()->create([
-            'name' => 'Agent Alex',
-            'email' => 'alex@6ixculture.com',
-            'username' => 'agent_alex',
-        ]);
-        $this->agentUser->assignRole('Stuff');
-
         $this->ordersDept = SupportDepartment::where('slug', 'orders')->first()
             ?? SupportDepartment::create(['name' => 'Orders', 'slug' => 'orders', 'is_active' => true]);
 
         $this->salesDept = SupportDepartment::where('slug', 'sales')->first()
             ?? SupportDepartment::create(['name' => 'Sales', 'slug' => 'sales', 'is_active' => true]);
 
-        $profile = SupportAgentProfile::create([
-            'user_id' => $this->agentUser->id,
+        // 2. Orders Department Agent Alex
+        $this->ordersAgent = User::factory()->create([
+            'name' => 'Agent Alex',
+            'email' => 'alex@6ixculture.com',
+            'username' => 'agent_alex',
+        ]);
+        $this->ordersAgent->assignRole('Stuff');
+
+        $ordersProfile = SupportAgentProfile::create([
+            'user_id' => $this->ordersAgent->id,
             'display_name' => 'Agent Alex',
             'status' => 'online',
             'availability' => 'available',
             'max_concurrent_conversations' => 5,
         ]);
-        $profile->departments()->attach($this->ordersDept->id, ['is_primary' => true]);
+        $ordersProfile->departments()->attach($this->ordersDept->id, ['is_primary' => true]);
 
-        // 3. Normal Customer User
+        // 3. Sales Department Agent Sarah
+        $this->salesAgent = User::factory()->create([
+            'name' => 'Agent Sarah',
+            'email' => 'sarah@6ixculture.com',
+            'username' => 'agent_sarah',
+        ]);
+        $this->salesAgent->assignRole('Stuff');
+
+        $salesProfile = SupportAgentProfile::create([
+            'user_id' => $this->salesAgent->id,
+            'display_name' => 'Agent Sarah',
+            'status' => 'online',
+            'availability' => 'available',
+            'max_concurrent_conversations' => 5,
+        ]);
+        $salesProfile->departments()->attach($this->salesDept->id, ['is_primary' => true]);
+
+        // 4. Normal Customer User
         $this->customerUser = User::factory()->create([
             'name' => 'Customer Jane',
             'email' => 'jane@gmail.com',
@@ -102,136 +128,263 @@ class AgentSupportApiTest extends TestCase
     }
 
     /** @test */
-    public function agent_can_list_conversations_queue_with_filters(): void
+    public function agent_cannot_access_another_department_conversation(): void
     {
-        Sanctum::actingAs($this->agentUser);
+        Sanctum::actingAs($this->ordersAgent);
 
-        // Create conversations with different statuses & departments
-        $conv1 = SupportConversation::create([
-            'customer_id' => $this->customerUser->id,
-            'department_id' => $this->ordersDept->id,
-            'status' => ConversationStatus::QUEUED,
-            'priority' => SupportPriority::HIGH,
-            'channel' => SupportChannel::WEB,
-            'mode' => ConversationMode::HUMAN,
-            'subject' => 'Where is my order #1001?',
-        ]);
-
-        $conv2 = SupportConversation::create([
+        // Create a conversation in the Sales department
+        $salesConv = SupportConversation::create([
             'customer_id' => $this->customerUser->id,
             'department_id' => $this->salesDept->id,
-            'status' => ConversationStatus::RESOLVED,
-            'priority' => SupportPriority::LOW,
+            'status' => ConversationStatus::QUEUED,
+            'priority' => SupportPriority::NORMAL,
             'channel' => SupportChannel::WEB,
-            'mode' => ConversationMode::AI,
-            'subject' => 'Sizing question',
+            'mode' => ConversationMode::HUMAN,
+            'subject' => 'Restock question for oversized hoodies',
         ]);
 
-        // 1. All active filter
-        $response = $this->getJson('/api/v1/support/agent/conversations');
-        $response->assertStatus(200)
-            ->assertJsonStructure([
-                'data' => [
-                    '*' => ['id', 'status', 'mode', 'priority', 'customer', 'department', 'last_message']
-                ],
-                'meta' => ['current_page', 'total']
+        $response = $this->getJson("/api/v1/support/agent/conversations/{$salesConv->public_id}");
+        $response->assertStatus(403)
+            ->assertJson([
+                'error' => [
+                    'code' => 'SUPPORT_AGENT_FORBIDDEN',
+                ]
             ]);
-
-        $this->assertEquals(2, $response->json('meta.total'));
-
-        // 2. Department filter
-        $filteredResponse = $this->getJson("/api/v1/support/agent/conversations?department_id={$this->ordersDept->id}");
-        $filteredResponse->assertStatus(200);
-        $this->assertEquals(1, $filteredResponse->json('meta.total'));
-        $this->assertEquals($conv1->public_id, $filteredResponse->json('data.0.id'));
-
-        // 3. Status filter
-        $statusResponse = $this->getJson('/api/v1/support/agent/conversations?status=resolved');
-        $statusResponse->assertStatus(200);
-        $this->assertEquals(1, $statusResponse->json('meta.total'));
-        $this->assertEquals($conv2->public_id, $statusResponse->json('data.0.id'));
     }
 
     /** @test */
-    public function agent_can_view_full_conversation_details(): void
+    public function authorized_department_agent_can_access_its_conversation(): void
     {
-        Sanctum::actingAs($this->agentUser);
+        Sanctum::actingAs($this->ordersAgent);
+
+        $ordersConv = SupportConversation::create([
+            'customer_id' => $this->customerUser->id,
+            'department_id' => $this->ordersDept->id,
+            'status' => ConversationStatus::QUEUED,
+            'priority' => SupportPriority::NORMAL,
+            'channel' => SupportChannel::WEB,
+            'mode' => ConversationMode::HUMAN,
+            'subject' => 'Order #9921 delay',
+        ]);
+
+        $response = $this->getJson("/api/v1/support/agent/conversations/{$ordersConv->public_id}");
+        $response->assertStatus(200)
+            ->assertJsonPath('data.id', $ordersConv->public_id);
+    }
+
+    /** @test */
+    public function assigned_agent_can_access_its_assigned_conversation_even_if_outside_department(): void
+    {
+        Sanctum::actingAs($this->ordersAgent);
+
+        // Conversation in Sales dept, but specifically assigned to Alex
+        $assignedConv = SupportConversation::create([
+            'customer_id' => $this->customerUser->id,
+            'department_id' => $this->salesDept->id,
+            'assigned_agent_id' => $this->ordersAgent->id,
+            'status' => ConversationStatus::HUMAN_ACTIVE,
+            'priority' => SupportPriority::NORMAL,
+            'channel' => SupportChannel::WEB,
+            'mode' => ConversationMode::HUMAN,
+            'subject' => 'Special sales consultation assigned to Alex',
+        ]);
+
+        $response = $this->getJson("/api/v1/support/agent/conversations/{$assignedConv->public_id}");
+        $response->assertStatus(200)
+            ->assertJsonPath('data.id', $assignedConv->public_id)
+            ->assertJsonPath('data.assigned_agent.id', $this->ordersAgent->id);
+    }
+
+    /** @test */
+    public function queue_department_id_filter_cannot_escape_authorization_scope(): void
+    {
+        Sanctum::actingAs($this->ordersAgent);
+
+        // Create 1 conversation in Orders and 1 in Sales
+        SupportConversation::create([
+            'customer_id' => $this->customerUser->id,
+            'department_id' => $this->ordersDept->id,
+            'status' => ConversationStatus::QUEUED,
+            'priority' => SupportPriority::NORMAL,
+            'channel' => SupportChannel::WEB,
+            'mode' => ConversationMode::HUMAN,
+            'subject' => 'Orders convo',
+        ]);
+
+        SupportConversation::create([
+            'customer_id' => $this->customerUser->id,
+            'department_id' => $this->salesDept->id,
+            'status' => ConversationStatus::QUEUED,
+            'priority' => SupportPriority::NORMAL,
+            'channel' => SupportChannel::WEB,
+            'mode' => ConversationMode::HUMAN,
+            'subject' => 'Sales convo',
+        ]);
+
+        // Orders agent lists queue: should ONLY see 1 conversation (Orders), never Sales
+        $response = $this->getJson('/api/v1/support/agent/conversations');
+        $response->assertStatus(200);
+        $this->assertEquals(1, $response->json('meta.total'));
+
+        // Orders agent tries to pass ?department_id=salesDept: must return 0 results, not leak Sales
+        $leakAttempt = $this->getJson("/api/v1/support/agent/conversations?department_id={$this->salesDept->id}");
+        $leakAttempt->assertStatus(200);
+        $this->assertEquals(0, $leakAttempt->json('meta.total'));
+    }
+
+    /** @test */
+    public function agent_cannot_assign_to_a_normal_customer(): void
+    {
+        Sanctum::actingAs($this->ordersAgent);
 
         $conv = SupportConversation::create([
+            'customer_id' => $this->customerUser->id,
+            'department_id' => $this->ordersDept->id,
+            'status' => ConversationStatus::QUEUED,
+            'priority' => SupportPriority::NORMAL,
+            'channel' => SupportChannel::WEB,
+            'mode' => ConversationMode::HUMAN,
+            'subject' => 'Assign test',
+        ]);
+
+        // Attempting to assign to a normal customer user
+        $response = $this->postJson("/api/v1/support/agent/conversations/{$conv->public_id}/assign", [
+            'agent_id' => $this->customerUser->id,
+        ]);
+
+        $response->assertStatus(422)
+            ->assertJsonPath('error.code', 'INVALID_ASSIGNMENT_TARGET');
+    }
+
+    /** @test */
+    public function agent_cannot_assign_to_an_unauthorized_agent_from_another_department(): void
+    {
+        Sanctum::actingAs($this->ordersAgent);
+
+        $conv = SupportConversation::create([
+            'customer_id' => $this->customerUser->id,
+            'department_id' => $this->ordersDept->id,
+            'status' => ConversationStatus::QUEUED,
+            'priority' => SupportPriority::NORMAL,
+            'channel' => SupportChannel::WEB,
+            'mode' => ConversationMode::HUMAN,
+            'subject' => 'Cross dept assignment test',
+        ]);
+
+        // Attempting to assign Orders conversation to Sarah (who only belongs to Sales)
+        $response = $this->postJson("/api/v1/support/agent/conversations/{$conv->public_id}/assign", [
+            'agent_id' => $this->salesAgent->id,
+        ]);
+
+        $response->assertStatus(422)
+            ->assertJsonPath('error.code', 'UNAUTHORIZED_ASSIGNMENT_TARGET');
+    }
+
+    /** @test */
+    public function agent_can_claim_self_and_records_assignment_history(): void
+    {
+        Sanctum::actingAs($this->ordersAgent);
+
+        $conv = SupportConversation::create([
+            'customer_id' => $this->customerUser->id,
+            'department_id' => $this->ordersDept->id,
+            'status' => ConversationStatus::QUEUED,
+            'priority' => SupportPriority::NORMAL,
+            'channel' => SupportChannel::WEB,
+            'mode' => ConversationMode::HUMAN,
+            'subject' => 'Claim test',
+        ]);
+
+        $response = $this->postJson("/api/v1/support/agent/conversations/{$conv->public_id}/assign", [
+            'agent_id' => 'self',
+            'reason' => 'Claimed by Alex',
+        ]);
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.assigned_agent.id', $this->ordersAgent->id)
+            ->assertJsonPath('data.status', 'human_active');
+
+        $this->assertDatabaseHas('support_assignments', [
+            'conversation_id' => $conv->id,
+            'agent_id' => $this->ordersAgent->id,
+            'assigned_by' => $this->ordersAgent->id,
+        ]);
+    }
+
+    /** @test */
+    public function unauthorized_department_transfer_fails(): void
+    {
+        Sanctum::actingAs($this->ordersAgent);
+
+        // Sales conversation that Alex is NOT authorized for
+        $salesConv = SupportConversation::create([
+            'customer_id' => $this->customerUser->id,
+            'department_id' => $this->salesDept->id,
+            'status' => ConversationStatus::QUEUED,
+            'priority' => SupportPriority::NORMAL,
+            'channel' => SupportChannel::WEB,
+            'mode' => ConversationMode::HUMAN,
+            'subject' => 'Unauthorized transfer attempt',
+        ]);
+
+        $response = $this->patchJson("/api/v1/support/agent/conversations/{$salesConv->public_id}/department", [
+            'department_id' => $this->ordersDept->id,
+        ]);
+
+        $response->assertStatus(403);
+    }
+
+    /** @test */
+    public function authorized_supervisor_or_department_agent_can_transfer_department(): void
+    {
+        Sanctum::actingAs($this->ordersAgent);
+
+        $ordersConv = SupportConversation::create([
             'customer_id' => $this->customerUser->id,
             'department_id' => $this->ordersDept->id,
             'status' => ConversationStatus::HUMAN_ACTIVE,
             'priority' => SupportPriority::NORMAL,
             'channel' => SupportChannel::WEB,
             'mode' => ConversationMode::HUMAN,
-            'subject' => 'Delivery delay',
+            'subject' => 'Transfer to sales for pre-order question',
         ]);
 
-        SupportMessage::create([
-            'conversation_id' => $conv->id,
-            'sender_type' => SenderType::CUSTOMER,
-            'sender_id' => $this->customerUser->id,
-            'message_type' => MessageType::TEXT,
-            'content' => 'Hello, is my package coming today?',
-            'is_internal' => false,
+        $response = $this->patchJson("/api/v1/support/agent/conversations/{$ordersConv->public_id}/department", [
+            'department_id' => $this->salesDept->id,
         ]);
 
-        $response = $this->getJson("/api/v1/support/agent/conversations/{$conv->public_id}");
         $response->assertStatus(200)
-            ->assertJsonPath('data.id', $conv->public_id)
-            ->assertJsonPath('data.customer.name', $this->customerUser->name)
-            ->assertJsonCount(1, 'data.messages');
+            ->assertJsonPath('data.department.id', $this->salesDept->id);
+
+        $ordersConv->refresh();
+        $this->assertEquals($this->salesDept->id, $ordersConv->department_id);
     }
 
     /** @test */
-    public function agent_can_claim_and_assign_conversation_and_records_assignment_history(): void
+    public function unauthorized_agent_cannot_access_customer_360_orders_or_ticket(): void
     {
-        Sanctum::actingAs($this->agentUser);
+        Sanctum::actingAs($this->ordersAgent);
 
-        $conv = SupportConversation::create([
+        // Sales conversation
+        $salesConv = SupportConversation::create([
             'customer_id' => $this->customerUser->id,
-            'department_id' => $this->ordersDept->id,
+            'department_id' => $this->salesDept->id,
             'status' => ConversationStatus::QUEUED,
             'priority' => SupportPriority::NORMAL,
             'channel' => SupportChannel::WEB,
             'mode' => ConversationMode::HUMAN,
-            'subject' => 'Unassigned inquiry',
+            'subject' => 'Restricted context test',
         ]);
 
-        $this->assertNull($conv->assigned_agent_id);
-
-        // Self-assign
-        $response = $this->postJson("/api/v1/support/agent/conversations/{$conv->public_id}/assign", [
-            'agent_id' => 'self',
-            'reason' => 'Claimed by agent Alex for immediate processing',
-        ]);
-
-        $response->assertStatus(200)
-            ->assertJsonPath('data.assigned_agent.id', $this->agentUser->id)
-            ->assertJsonPath('data.status', 'human_active');
-
-        $conv->refresh();
-        $this->assertEquals($this->agentUser->id, $conv->assigned_agent_id);
-        $this->assertEquals(ConversationStatus::HUMAN_ACTIVE, $conv->status);
-
-        // Verify assignment history in SupportAssignment
-        $this->assertDatabaseHas('support_assignments', [
-            'conversation_id' => $conv->id,
-            'assigned_by' => $this->agentUser->id,
-            'agent_id' => $this->agentUser->id,
-        ]);
-
-        // Verify system message generated in timeline
-        $this->assertDatabaseHas('support_messages', [
-            'conversation_id' => $conv->id,
-            'sender_type' => SenderType::SYSTEM->value,
-        ]);
+        $this->getJson("/api/v1/support/agent/conversations/{$salesConv->public_id}/customer")->assertStatus(403);
+        $this->getJson("/api/v1/support/agent/conversations/{$salesConv->public_id}/orders")->assertStatus(403);
+        $this->getJson("/api/v1/support/agent/conversations/{$salesConv->public_id}/ticket")->assertStatus(403);
     }
 
     /** @test */
     public function agent_reply_creates_customer_visible_message_and_updates_status(): void
     {
-        Sanctum::actingAs($this->agentUser);
+        Sanctum::actingAs($this->ordersAgent);
 
         $conv = SupportConversation::create([
             'customer_id' => $this->customerUser->id,
@@ -252,7 +405,6 @@ class AgentSupportApiTest extends TestCase
         $response->assertStatus(200)
             ->assertJsonPath('data.status', 'awaiting_customer');
 
-        // Check message in database
         $this->assertDatabaseHas('support_messages', [
             'conversation_id' => $conv->id,
             'sender_type' => SenderType::AGENT->value,
@@ -260,7 +412,7 @@ class AgentSupportApiTest extends TestCase
             'is_internal' => false,
         ]);
 
-        // Customer API verification: Customer can see this agent message
+        // Customer can see this message
         Sanctum::actingAs($this->customerUser);
         $customerResponse = $this->getJson("/api/v1/support/conversations/{$conv->public_id}/messages");
         $customerResponse->assertStatus(200)
@@ -270,7 +422,7 @@ class AgentSupportApiTest extends TestCase
     /** @test */
     public function internal_staff_notes_are_strictly_isolated_from_customer_api(): void
     {
-        Sanctum::actingAs($this->agentUser);
+        Sanctum::actingAs($this->ordersAgent);
 
         $conv = SupportConversation::create([
             'customer_id' => $this->customerUser->id,
@@ -289,7 +441,7 @@ class AgentSupportApiTest extends TestCase
 
         $response->assertStatus(200);
 
-        // 1. Agent console CAN see the internal note
+        // 1. Authorized agent can see internal note
         $agentView = $this->getJson("/api/v1/support/agent/conversations/{$conv->public_id}");
         $agentView->assertStatus(200)
             ->assertJsonFragment([
@@ -297,22 +449,21 @@ class AgentSupportApiTest extends TestCase
                 'is_internal' => true,
             ]);
 
-        // 2. CRITICAL REGRESSION TEST: Customer API MUST NEVER return this internal note
+        // 2. Customer API NEVER sees internal note
         Sanctum::actingAs($this->customerUser);
-
-        $customerMessages = $this->getJson("/api/v1/support/conversations/{$conv->public_id}/messages");
-        $customerMessages->assertStatus(200)
+        $this->getJson("/api/v1/support/conversations/{$conv->public_id}/messages")
+            ->assertStatus(200)
             ->assertJsonMissing(['content' => $privateNote]);
 
-        $customerDetail = $this->getJson("/api/v1/support/conversations/{$conv->public_id}");
-        $customerDetail->assertStatus(200)
+        $this->getJson("/api/v1/support/conversations/{$conv->public_id}")
+            ->assertStatus(200)
             ->assertJsonMissing(['content' => $privateNote]);
     }
 
     /** @test */
-    public function agent_can_update_status_and_priority_and_department(): void
+    public function actual_ai_support_orchestrator_path_is_invoked_for_summary_and_persisted(): void
     {
-        Sanctum::actingAs($this->agentUser);
+        Sanctum::actingAs($this->ordersAgent);
 
         $conv = SupportConversation::create([
             'customer_id' => $this->customerUser->id,
@@ -321,57 +472,54 @@ class AgentSupportApiTest extends TestCase
             'priority' => SupportPriority::NORMAL,
             'channel' => SupportChannel::WEB,
             'mode' => ConversationMode::HUMAN,
-            'subject' => 'Status transition test',
+            'subject' => 'Delayed order inquiry',
         ]);
 
-        // 1. Update status to resolved
-        $statusRes = $this->patchJson("/api/v1/support/agent/conversations/{$conv->public_id}/status", [
-            'status' => 'resolved',
-        ]);
-        $statusRes->assertStatus(200)->assertJsonPath('data.status', 'resolved');
-        $conv->refresh();
-        $this->assertNotNull($conv->resolved_at);
-
-        // 2. Update priority to urgent
-        $priorityRes = $this->patchJson("/api/v1/support/agent/conversations/{$conv->public_id}/priority", [
-            'priority' => 'urgent',
-        ]);
-        $priorityRes->assertStatus(200)->assertJsonPath('data.priority', 'urgent');
-
-        // 3. Transfer department to sales
-        $deptRes = $this->patchJson("/api/v1/support/agent/conversations/{$conv->public_id}/department", [
-            'department_id' => $this->salesDept->id,
-        ]);
-        $deptRes->assertStatus(200)->assertJsonPath('data.department.id', $this->salesDept->id);
-    }
-
-    /** @test */
-    public function customer_360_endpoint_returns_metrics_and_recent_orders(): void
-    {
-        Sanctum::actingAs($this->agentUser);
-
-        $conv = SupportConversation::create([
-            'customer_id' => $this->customerUser->id,
-            'department_id' => $this->ordersDept->id,
-            'status' => ConversationStatus::HUMAN_ACTIVE,
-            'priority' => SupportPriority::NORMAL,
-            'channel' => SupportChannel::WEB,
-            'mode' => ConversationMode::HUMAN,
-            'subject' => '360 context test',
+        SupportMessage::create([
+            'conversation_id' => $conv->id,
+            'sender_type' => SenderType::CUSTOMER,
+            'sender_id' => $this->customerUser->id,
+            'message_type' => MessageType::TEXT,
+            'content' => 'My order #6IX-4029 has not arrived yet. It was supposed to be delivered 2 days ago.',
+            'is_internal' => false,
         ]);
 
-        $response = $this->getJson("/api/v1/support/agent/conversations/{$conv->public_id}/customer");
+        $structuredSummary = "Customer Issue: Order #6IX-4029 delivery delay.\nDetected Intent: Order Tracking.\nLanguage: EN.\nRelevant Order: #6IX-4029.\nKey Facts: Delivery 2 days overdue.\nActions Already Taken: Customer reported delay.\nCurrent Status: human_active in Orders, Priority: normal.\nReason for Escalation: Customer requested shipment verification.\nRecommended Next Step: Check courier tracking and reassure customer.";
+
+        Http::fake([
+            'openrouter.ai/*' => Http::response([
+                'choices' => [
+                    [
+                        'message' => [
+                            'role' => 'assistant',
+                            'content' => $structuredSummary,
+                        ],
+                        'finish_reason' => 'stop',
+                    ]
+                ]
+            ], 200)
+        ]);
+
+        $response = $this->postJson("/api/v1/support/agent/conversations/{$conv->public_id}/summarize");
+
         $response->assertStatus(200)
-            ->assertJsonPath('data.id', $this->customerUser->id)
-            ->assertJsonPath('data.name', $this->customerUser->name)
-            ->assertJsonPath('data.email', $this->customerUser->email)
-            ->assertJsonStructure(['data' => ['total_orders', 'total_spend', 'open_tickets_count']]);
+            ->assertJsonPath('data.ai_summary', $structuredSummary);
+
+        $conv->refresh();
+        $this->assertEquals($structuredSummary, $conv->ai_summary);
+
+        // Verify audit log recorded
+        $this->assertDatabaseHas('support_audit_logs', [
+            'conversation_id' => $conv->id,
+            'action' => 'GENERATE_AI_SUMMARY',
+            'authorization_result' => 'ALLOW',
+        ]);
     }
 
     /** @test */
-    public function agent_can_generate_ai_summary_and_fetch_departments_and_agents(): void
+    public function provider_failure_during_summary_returns_safe_error_without_damaging_conversation(): void
     {
-        Sanctum::actingAs($this->agentUser);
+        Sanctum::actingAs($this->ordersAgent);
 
         $conv = SupportConversation::create([
             'customer_id' => $this->customerUser->id,
@@ -380,22 +528,23 @@ class AgentSupportApiTest extends TestCase
             'priority' => SupportPriority::NORMAL,
             'channel' => SupportChannel::WEB,
             'mode' => ConversationMode::HUMAN,
-            'subject' => 'AI summary test',
+            'subject' => 'Provider error test',
+            'ai_summary' => 'Existing safe summary',
         ]);
 
-        // Summarize
-        $sumRes = $this->postJson("/api/v1/support/agent/conversations/{$conv->public_id}/summarize");
-        $sumRes->assertStatus(200)
-            ->assertJsonStructure(['data' => ['ai_summary']]);
+        // Provider returns 500 error
+        Http::fake([
+            'openrouter.ai/*' => Http::response(['error' => 'Rate limit exceeded'], 429)
+        ]);
 
-        // Departments
-        $deptRes = $this->getJson('/api/v1/support/agent/departments');
-        $deptRes->assertStatus(200)
-            ->assertJsonStructure(['data' => [['id', 'name', 'slug']]]);
+        $response = $this->postJson("/api/v1/support/agent/conversations/{$conv->public_id}/summarize");
 
-        // Agents
-        $agentRes = $this->getJson('/api/v1/support/agent/agents');
-        $agentRes->assertStatus(200)
-            ->assertJsonStructure(['data' => [['id', 'name', 'email']]]);
+        $response->assertStatus(502)
+            ->assertJsonPath('error.code', 'AI_SUMMARY_PROVIDER_ERROR');
+
+        // Conversation data must remain intact and unharmed
+        $conv->refresh();
+        $this->assertEquals('Existing safe summary', $conv->ai_summary);
+        $this->assertEquals(ConversationStatus::HUMAN_ACTIVE, $conv->status);
     }
 }

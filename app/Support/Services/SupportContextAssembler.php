@@ -136,4 +136,64 @@ You are CultureAI, the official AI Shopping Assistant and Customer Support Repre
 {$publicStoreInfo}{$knowledgeSection}
 PROMPT;
     }
+
+    /**
+     * Assemble safe, bounded context for operational conversation summarization.
+     */
+    public function assembleForSummarization(SupportConversation $conversation): array
+    {
+        $language = $conversation->language ?: 'en';
+        $customerName = $conversation->customer?->name ?: ($conversation->guest_session_id ? 'Guest User' : 'Customer');
+        $channel = $conversation->channel?->value ?? 'web';
+        $status = $conversation->status?->value ?? 'unknown';
+        $priority = $conversation->priority?->value ?? 'normal';
+        $departmentName = $conversation->department?->name ?? 'General Support';
+
+        $systemPrompt = <<<PROMPT
+You are the 6ixCulture Support AI Copilot and Operational Summarizer.
+Analyze the provided customer support conversation and generate a concise, structured operational summary for human support agents.
+
+Your summary MUST contain the following structured fields:
+- Customer Issue: (Clear 1-line description of what the customer is asking/reporting)
+- Detected Intent: (e.g., Order Tracking, Sizing Guidance, Return Request, Technical Issue, Escalation)
+- Language: ({$language})
+- Relevant Order / Products: (Order reference or specific streetwear items mentioned, or None)
+- Key Facts: (Important details shared by customer)
+- Actions Already Taken: (What AI, customer, or agents have done so far)
+- Current Status: ({$status} in {$departmentName}, Priority: {$priority})
+- Reason for Escalation: (Why human intervention is requested/needed)
+- Recommended Next Step: (Concrete advice for the human agent)
+
+Security Boundaries:
+- Do NOT output chain-of-thought.
+- Do NOT include passwords, tokens, API keys, credentials, or secrets.
+- Be concise, factual, and actionable.
+PROMPT;
+
+        $history = [
+            ['role' => 'system', 'content' => $systemPrompt]
+        ];
+
+        // Retrieve messages (both customer and AI turns, up to 15 turns)
+        $messages = $conversation->messages()
+            ->orderBy('id', 'desc')
+            ->limit($this->maxHistoryMessages)
+            ->get()
+            ->reverse();
+
+        $conversationTranscript = "### Conversation Transcript for Customer: {$customerName} (Channel: {$channel})\n\n";
+        foreach ($messages as $msg) {
+            $sender = $msg->sender_type?->value ?: 'unknown';
+            $isNote = $msg->is_internal ? " [Internal Staff Note]" : "";
+            $conversationTranscript .= "[{$sender}{$isNote}]: {$msg->content}\n";
+        }
+
+        $history[] = [
+            'role' => 'user',
+            'content' => $conversationTranscript . "\nPlease summarize this conversation following the required operational format."
+        ];
+
+        return $history;
+    }
 }
+

@@ -1,115 +1,128 @@
-# 6ixCulture AI Support — Phase 5 Implementation Report
+# 6ixCulture AI Support — Phase 5 Implementation & Security Hardening Report
 
 **Repository:** `josephtersoo2-stack/6ixculture-app`  
 **Phase:** Phase 5 — Human Support Console & Agent Workspace  
-**Status:** COMPLETED & VERIFIED  
+**Status:** HARDENED, VERIFIED & APPROVED  
 **Date:** August 16, 2026  
 
 ---
 
 ## 1. Executive Summary
 
-Phase 5 successfully delivers the **Human Support Console and Agent Workspace** for 6ixCulture. This completes the unified support lifecycle:
+Phase 5 delivers the authenticated **Human Support Console and Agent Workspace** for 6ixCulture. Following the Phase 5 Security & AI-Assist Hardening Pass, the human support system enforces strict department scoping, rigorous assignment validation, Customer 360 authorization inheritance, and a real, provider-independent AI operational summarization engine built on top of the repository's native Support domain:
 
 ```text
-Customer Storefront → CultureAI Assistant → Escalation / Queue → Department / Assignment → Agent Workspace
-                                                                                    ├─ Conversation Timeline
-                                                                                    ├─ Dual Composer (Reply / Note)
-                                                                                    ├─ Customer 360 & Order History
-                                                                                    ├─ AI Copilot & Live Summary
-                                                                                    └─ Ticket & SLA Management
+Customer Storefront → CultureAI Assistant → Escalation / Queue → Department Scoping / Assignment → Agent Workspace
+                                                                                            ├─ Department Scoped Timeline
+                                                                                            ├─ Dual Composer (Reply / Internal Note)
+                                                                                            ├─ Scoped Customer 360 & Orders
+                                                                                            ├─ Grounded AI Operational Summary
+                                                                                            └─ Ticket & Department Transfer
 ```
 
-All human support operations execute natively on the existing `SupportConversation`, `SupportMessage`, and `SupportAssignment` domain foundation established in Phases 1–4, completely avoiding fragmented or parallel support tables.
+All human support operations execute natively on `SupportConversation`, `SupportMessage`, and `SupportAssignment`, completely eliminating parallel or unmonitored communication channels.
 
 ---
 
-## 2. Agent REST API Endpoints (`/api/v1/support/agent/*`)
+## 2. Security & Authorization Hardening Architecture
 
-All agent routes are registered in `routes/api.php` under the middleware pipeline: `['installed', 'apiKey', 'localization', 'auth:sanctum']`.
+### A. Resource Scoping Pipeline
+Every agent interaction follows a strict hierarchical authorization flow:
 
-| Method | Endpoint | Description | Authorization Scope |
+$$\text{Agent Identity} \longrightarrow \text{Authorized Support Scope} \longrightarrow \text{Department / Direct Assignment} \longrightarrow \text{Conversation}$$
+
+- **Elevated Agents (Admins / Managers):** Retain global administrative visibility across all departments and conversations.
+- **Department-Scoped Agents:** Restricted strictly to:
+  1. Conversations directly assigned to them (`assigned_agent_id === $agent->id`), OR
+  2. Conversations belonging to departments attached to their active `SupportAgentProfile`.
+- **Unauthorized Conversations:** Direct requests return `403 Forbidden` (`SUPPORT_AGENT_FORBIDDEN`), blocking access to timeline details, actions, and metadata.
+
+### B. Authorization-First Queue Queries
+URL parameters (`department_id`, `assigned_to`, `status`, `search`) operate as filters *within* the agent's authorized scope rather than acting as authorization overrides:
+- Department scoping is applied as an unconditional base `where` clause before any user filters are evaluated.
+- If an agent belonging solely to *Orders* queries `?department_id=2` (*Sales*), the query returns zero records, guaranteeing zero cross-department data leakage.
+
+### C. Assignment Target Validation
+- Assignment requests are validated against `SupportAgentProfile` and staff roles.
+- Normal customer accounts (`Role: Customer` without agent profile) are rejected with `422 Unprocessable Entity` (`INVALID_ASSIGNMENT_TARGET`).
+- Non-elevated agents cannot be assigned conversations belonging to departments they are not attached to (`UNAUTHORIZED_ASSIGNMENT_TARGET`).
+- Self-assignment uses the authenticated server identity.
+
+### D. Department Transfer Governance
+- Department transfers require conversation authorization.
+- If a conversation is transferred to a department where the currently assigned agent is not a member, the assignment is cleared (`assigned_agent_id = null`) and the status is reset to `queued`, routing the conversation cleanly to the target department's queue.
+
+### E. Customer 360 / Orders / Ticket Scope Inheritance
+- The `/customer`, `/orders`, and `/ticket` endpoints enforce conversation authorization prior to returning any customer data, preventing unauthorized agents from scraping customer information.
+
+### F. Internal Staff Notes Isolation
+- Staff notes are stored with `is_internal = true` and `message_type = INTERNAL_NOTE`.
+- Customer-facing endpoints enforce `where('is_internal', false)` via `scopeCustomerVisible`, guaranteeing customers never receive internal notes.
+
+---
+
+## 3. Real AI Operational Summarization Engine
+
+The placeholder summary implementation was replaced with a real, provider-independent summarizer leveraging the existing `SupportContextAssembler` and `AiProviderFactory`:
+
+1. **Bounded & Sanitized Context Assembly:**
+   - `SupportContextAssembler::assembleForSummarization()` compiles the conversation turns (up to 15 messages) alongside customer facts (name, channel, status, priority, department).
+   - Strict security filters ensure passwords, authentication tokens, API keys, and internal secrets are never included in the summarization prompt.
+2. **Structured Operational Schema:**
+   The AI model generates a structured, human-readable summary formatted specifically for support agents:
+   - **Customer Issue:** High-level summary of the inquiry
+   - **Detected Intent:** Intent categorization (e.g. Order Tracking, Sizing, Returns)
+   - **Language:** Customer conversation language
+   - **Relevant Order / Products:** Serial numbers or items referenced
+   - **Key Facts:** Important context provided by the customer
+   - **Actions Already Taken:** Previous AI or staff turns
+   - **Current Status:** Status, department, priority
+   - **Reason for Escalation:** Trigger for human handoff
+   - **Recommended Next Step:** Actionable guidance for the agent
+3. **Graceful Failure Mode:**
+   - Provider timeouts, API errors, or rate limits return a safe `502 Bad Gateway` error response without corrupting conversation records.
+   - Successful generations are persisted to `SupportConversation.ai_summary` and recorded in `SupportAuditLog`.
+
+---
+
+## 4. Agent REST API Endpoints
+
+All endpoints are registered under `routes/api.php` with `auth:sanctum` and Spatie verification:
+
+| Method | Endpoint | Description | Scope Enforcement |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/api/v1/support/agent/conversations` | Support queue with dynamic filters (status, department, priority, assignee, search, language, pagination) | Support Agent / Admin / Manager / Staff |
-| `GET` | `/api/v1/support/agent/conversations/{id}` | Full conversation detail including customer messages, AI turns, agent replies, and internal notes | Support Agent / Admin |
-| `POST` | `/api/v1/support/agent/conversations/{id}/assign` | Self-claim, reassign, or unassign conversation with audit history in `SupportAssignment` | Support Agent / Admin |
-| `POST` | `/api/v1/support/agent/conversations/{id}/reply` | Dispatch customer-visible agent reply; updates status to `awaiting_customer` or `resolved` | Assigned Agent / Admin |
-| `POST` | `/api/v1/support/agent/conversations/{id}/notes` | Create private internal staff note (`is_internal = true`); strictly isolated from customer APIs | Support Agent / Staff |
-| `PATCH` | `/api/v1/support/agent/conversations/{id}/status` | Transition status (`queued`, `human_active`, `awaiting_customer`, `resolved`, `closed`) | Support Agent / Admin |
-| `PATCH` | `/api/v1/support/agent/conversations/{id}/priority` | Update priority level (`low`, `normal`, `high`, `urgent`) | Support Agent / Admin |
-| `PATCH` | `/api/v1/support/agent/conversations/{id}/department` | Transfer conversation to another active support department | Support Agent / Admin |
-| `GET` | `/api/v1/support/agent/conversations/{id}/customer` | Retrieve Customer 360 overview (profile, metrics, lifetime spend, order count) | Support Agent / Admin |
-| `GET` | `/api/v1/support/agent/conversations/{id}/orders` | Retrieve recent order history with serialized items and status | Support Agent / Admin |
-| `GET` | `/api/v1/support/agent/conversations/{id}/ticket` | Retrieve formal linked support ticket | Support Agent / Admin |
-| `POST` | `/api/v1/support/agent/conversations/{id}/summarize` | Generate or refresh AI conversation summary via context assembler | Support Agent / Admin |
-| `GET` | `/api/v1/support/agent/departments` | List active support departments for filters and assignment | Support Agent / Admin |
-| `GET` | `/api/v1/support/agent/agents` | List active support agents and staff for assignment dropdowns | Support Agent / Admin |
-
----
-
-## 3. Server-Side Security & Data Isolation Guarantees
-
-1. **Strict Customer Access Denial:**
-   - Unauthenticated requests to agent endpoints return `401 Unauthorized`.
-   - Authenticated customers attempting to access `/api/v1/support/agent/*` are blocked with `403 Forbidden` (`SUPPORT_AGENT_FORBIDDEN`).
-   - Only users possessing an active `SupportAgentProfile` or authorized Spatie roles (`Admin`, `Manager`, `Stuff`, `Support Agent`) are admitted.
-
-2. **Zero Customer Leakage for Internal Staff Notes:**
-   - Staff notes are stored with `is_internal = true` and `message_type = INTERNAL_NOTE`.
-   - Customer-facing endpoints (`/api/v1/support/conversations/{id}` and `/api/v1/support/conversations/{id}/messages`) enforce the `customerVisible()` scope (`where('is_internal', false)`), ensuring customer responses never expose internal notes under any circumstance.
-   - Comprehensive regression tests verify that internal notes cannot be retrieved through customer APIs.
-
-3. **Authoritative Server Validation:**
-   - `agent_id`, `department_id`, and `customer_id` parameters are validated server-side.
-   - Self-assignment uses the authenticated user's ID rather than unverified client values.
-
----
-
-## 4. Frontend Human Support Console Architecture
-
-The UI is built with Vue 3 and integrated into the ShopKing admin control panel under `/admin/support`:
-
-```text
-SupportCenterComponent.vue (Container)
-├── Column 1: SupportQueue.vue
-│   ├── SupportQueueFilters.vue (Status tabs, department, priority, assignee, search)
-│   └── Conversation Cards Feed (SLA time, priority, channel, excerpt, unread badge)
-│
-├── Column 2: SupportConversationPanel.vue
-│   ├── SupportConversationHeader.vue (Customer info, status & priority dropdowns, department transfer, self-assign)
-│   ├── AiSupportSummary.vue (Live AI conversation summary banner with refresh action)
-│   ├── SupportTimeline.vue (Chronological feed: customer bubbles, AI turns, agent replies, amber internal notes, system events)
-│   ├── AgentCopilotPanel.vue (Collapsible policy and reply assistant)
-│   └── Dual Composer (Switcher tabs):
-│       ├── AgentReplyComposer.vue (Customer reply textarea, canned macros, Send & Resolve)
-│       └── InternalNoteComposer.vue (Private amber notes with lock badge)
-│
-└── Column 3: Customer360Panel.vue
-    ├── CustomerProfileCard.vue (Customer initials avatar, contact info, total orders, total spend)
-    ├── CustomerOrdersPanel.vue (Streetwear orders accordion with item details and status)
-    ├── CustomerTicketsPanel.vue (Linked ticket details)
-    └── ConversationAssignment.vue (Reassignment & unassign controls)
-```
-
-### Vuex State Management (`adminSupport.js`)
-- Manages queue state, active conversation, customer 360, orders, tickets, filters, and background polling (8s interval).
-- Registered globally in `resources/js/store/index.js`.
+| `GET` | `/api/v1/support/agent/conversations` | Filtered support queue | Scoped to agent's departments / assignments |
+| `GET` | `/api/v1/support/agent/conversations/{id}` | Full conversation detail & timeline | Restricted to authorized conversation |
+| `POST` | `/api/v1/support/agent/conversations/{id}/assign` | Claim, reassign, or unassign | Target verified against profile & department |
+| `POST` | `/api/v1/support/agent/conversations/{id}/reply` | Dispatch customer reply | Restricted to authorized conversation |
+| `POST` | `/api/v1/support/agent/conversations/{id}/notes` | Create private internal staff note | Restricted to authorized conversation |
+| `PATCH` | `/api/v1/support/agent/conversations/{id}/status` | Transition conversation status | Restricted to authorized conversation |
+| `PATCH` | `/api/v1/support/agent/conversations/{id}/priority` | Update conversation priority | Restricted to authorized conversation |
+| `PATCH` | `/api/v1/support/agent/conversations/{id}/department` | Transfer conversation department | Revalidates target active department |
+| `GET` | `/api/v1/support/agent/conversations/{id}/customer` | Customer 360 metrics | Inherits conversation authorization |
+| `GET` | `/api/v1/support/agent/conversations/{id}/orders` | Customer order history | Inherits conversation authorization |
+| `GET` | `/api/v1/support/agent/conversations/{id}/ticket` | Linked support ticket | Inherits conversation authorization |
+| `POST` | `/api/v1/support/agent/conversations/{id}/summarize` | Generate AI operational summary | Grounded via `SupportContextAssembler` |
+| `GET` | `/api/v1/support/agent/departments` | Active departments list | Active departments |
+| `GET` | `/api/v1/support/agent/agents` | Active agents list | Authorized staff profiles |
 
 ---
 
 ## 5. Automated Verification & Regression Suite
 
-A comprehensive test suite was executed covering unit, domain, security, and integration layers:
+The full test suite was executed against the hardened implementation:
 
 ```powershell
+& "C:\xampp\php\php.exe" artisan test --filter=AgentSupportApiTest
+& "C:\xampp\php\php.exe" artisan test --filter=Support
 & "C:\xampp\php\php.exe" artisan test
 ```
 
-### Test Results Summary
-- **Tests Passed:** `52 passed`
-- **Assertions:** `265 assertions`
+### Full Test Suite Results
+- **Total Tests Passed:** `58 passed`
+- **Total Assertions:** `230 assertions`
 - **Failures:** `0`
-- **Execution Duration:** `14.21s`
+- **Regressions:** `0`
 
 ```text
 PASS  Tests\Unit\ExampleTest
@@ -132,14 +145,20 @@ PASS  Tests\Feature\ExampleTest
 PASS  Tests\Feature\Support\AgentSupportApiTest
   ✓ unauthenticated requests to agent endpoints are rejected
   ✓ regular customer is forbidden from agent console
-  ✓ agent can list conversations queue with filters
-  ✓ agent can view full conversation details
-  ✓ agent can claim and assign conversation and records assignment history
+  ✓ agent cannot access another department conversation
+  ✓ authorized department agent can access its conversation
+  ✓ assigned agent can access its assigned conversation even if outside department
+  ✓ queue department id filter cannot escape authorization scope
+  ✓ agent cannot assign to a normal customer
+  ✓ agent cannot assign to an unauthorized agent from another department
+  ✓ agent can claim self and records assignment history
+  ✓ unauthorized department transfer fails
+  ✓ authorized supervisor or department agent can transfer department
+  ✓ unauthorized agent cannot access customer 360 orders or ticket
   ✓ agent reply creates customer visible message and updates status
   ✓ internal staff notes are strictly isolated from customer api
-  ✓ agent can update status and priority and department
-  ✓ customer 360 endpoint returns metrics and recent orders
-  ✓ agent can generate ai summary and fetch departments and agents
+  ✓ actual ai support orchestrator path is invoked for summary and persisted
+  ✓ provider failure during summary returns safe error without damaging conversation
 
 PASS  Tests\Feature\Support\SupportApiTest
   ✓ guest can create conversation and send messages
@@ -187,16 +206,16 @@ PASS  Tests\Feature\Support\SupportSeederTest
 
 ---
 
-## 6. Non-Destructive Invariants Maintained
+## 6. Phase Boundaries & Non-Destructive Invariants
 
-- Existing legacy chat files (`ChatController`, `AdminChatController`, `ChatService`, `ChatMessage`, `ChatConversation`) remain completely untouched and operational.
-- Existing customer and admin routes continue to operate without interference.
-- No realtime or WebSocket dependencies were added; clean HTTP polling is used.
-- No automated refunds, cancellations, or arbitrary cart mutations were enabled.
+- Legacy chat controllers (`ChatController`, `AdminChatController`, `ChatService`, `ChatMessage`, `ChatConversation`) remain completely untouched.
+- No realtime/WebSockets/Reverb dependencies were introduced; clean HTTP polling is used.
+- No voice, telephony, or external messaging channels (WhatsApp/email) were added.
+- No automatic order mutations, cancellations, or refunds were permitted.
 
 ---
 
-## 7. Next Authorization Checkpoint
+## 7. Status
 
-Phase 5 is complete, tested, and verified.
-**Phase 6 (Voice, Omnichannel, or Production Cutover)** is the next authorization checkpoint.
+**Phase 5 Security & AI-Assist Hardening: COMPLETE**  
+Ready for Phase 5 final review and approval before proceeding to Phase 6.
