@@ -30,9 +30,11 @@ class AgentSupportApiTest extends TestCase
     protected User $adminUser;
     protected User $ordersAgent;
     protected User $salesAgent;
+    protected User $dualDeptAgent;
     protected User $customerUser;
     protected SupportDepartment $salesDept;
     protected SupportDepartment $ordersDept;
+    protected SupportDepartment $billingDept;
 
     protected function setUp(): void
     {
@@ -62,6 +64,9 @@ class AgentSupportApiTest extends TestCase
 
         $this->salesDept = SupportDepartment::where('slug', 'sales')->first()
             ?? SupportDepartment::create(['name' => 'Sales', 'slug' => 'sales', 'is_active' => true]);
+
+        $this->billingDept = SupportDepartment::where('slug', 'billing')->first()
+            ?? SupportDepartment::create(['name' => 'Billing', 'slug' => 'billing', 'is_active' => true]);
 
         // 2. Orders Department Agent Alex
         $this->ordersAgent = User::factory()->create([
@@ -97,7 +102,27 @@ class AgentSupportApiTest extends TestCase
         ]);
         $salesProfile->departments()->attach($this->salesDept->id, ['is_primary' => true]);
 
-        // 4. Normal Customer User
+        // 4. Dual Department Agent Sam (Orders + Billing)
+        $this->dualDeptAgent = User::factory()->create([
+            'name' => 'Agent Sam',
+            'email' => 'sam@6ixculture.com',
+            'username' => 'agent_sam',
+        ]);
+        $this->dualDeptAgent->assignRole('Stuff');
+
+        $dualProfile = SupportAgentProfile::create([
+            'user_id' => $this->dualDeptAgent->id,
+            'display_name' => 'Agent Sam',
+            'status' => 'online',
+            'availability' => 'available',
+            'max_concurrent_conversations' => 5,
+        ]);
+        $dualProfile->departments()->attach([
+            $this->ordersDept->id => ['is_primary' => true],
+            $this->billingDept->id => ['is_primary' => false],
+        ]);
+
+        // 5. Normal Customer User
         $this->customerUser = User::factory()->create([
             'name' => 'Customer Jane',
             'email' => 'jane@gmail.com',
@@ -312,32 +337,61 @@ class AgentSupportApiTest extends TestCase
     }
 
     /** @test */
-    public function unauthorized_department_transfer_fails(): void
+    public function non_elevated_agent_cannot_transfer_to_unauthorized_target_department(): void
     {
         Sanctum::actingAs($this->ordersAgent);
 
-        // Sales conversation that Alex is NOT authorized for
-        $salesConv = SupportConversation::create([
+        // Orders conversation that Alex IS authorized for, but target department is Sales (unauthorized for Alex)
+        $ordersConv = SupportConversation::create([
             'customer_id' => $this->customerUser->id,
-            'department_id' => $this->salesDept->id,
-            'status' => ConversationStatus::QUEUED,
+            'department_id' => $this->ordersDept->id,
+            'status' => ConversationStatus::HUMAN_ACTIVE,
             'priority' => SupportPriority::NORMAL,
             'channel' => SupportChannel::WEB,
             'mode' => ConversationMode::HUMAN,
-            'subject' => 'Unauthorized transfer attempt',
+            'subject' => 'Unauthorized target department transfer attempt',
         ]);
 
-        $response = $this->patchJson("/api/v1/support/agent/conversations/{$salesConv->public_id}/department", [
-            'department_id' => $this->ordersDept->id,
+        $response = $this->patchJson("/api/v1/support/agent/conversations/{$ordersConv->public_id}/department", [
+            'department_id' => $this->salesDept->id,
         ]);
 
-        $response->assertStatus(403);
+        $response->assertStatus(403)
+            ->assertJsonPath('error.code', 'SUPPORT_AGENT_FORBIDDEN');
     }
 
     /** @test */
-    public function authorized_supervisor_or_department_agent_can_transfer_department(): void
+    public function non_elevated_agent_can_transfer_to_authorized_target_department(): void
     {
-        Sanctum::actingAs($this->ordersAgent);
+        Sanctum::actingAs($this->dualDeptAgent);
+
+        // Sam is authorized for both Orders and Billing
+        $ordersConv = SupportConversation::create([
+            'customer_id' => $this->customerUser->id,
+            'department_id' => $this->ordersDept->id,
+            'assigned_agent_id' => $this->dualDeptAgent->id,
+            'status' => ConversationStatus::HUMAN_ACTIVE,
+            'priority' => SupportPriority::NORMAL,
+            'channel' => SupportChannel::WEB,
+            'mode' => ConversationMode::HUMAN,
+            'subject' => 'Transfer from orders to billing',
+        ]);
+
+        $response = $this->patchJson("/api/v1/support/agent/conversations/{$ordersConv->public_id}/department", [
+            'department_id' => $this->billingDept->id,
+        ]);
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.department.id', $this->billingDept->id);
+
+        $ordersConv->refresh();
+        $this->assertEquals($this->billingDept->id, $ordersConv->department_id);
+    }
+
+    /** @test */
+    public function elevated_admin_can_transfer_across_any_departments(): void
+    {
+        Sanctum::actingAs($this->adminUser);
 
         $ordersConv = SupportConversation::create([
             'customer_id' => $this->customerUser->id,
@@ -346,7 +400,7 @@ class AgentSupportApiTest extends TestCase
             'priority' => SupportPriority::NORMAL,
             'channel' => SupportChannel::WEB,
             'mode' => ConversationMode::HUMAN,
-            'subject' => 'Transfer to sales for pre-order question',
+            'subject' => 'Admin transfer across departments',
         ]);
 
         $response = $this->patchJson("/api/v1/support/agent/conversations/{$ordersConv->public_id}/department", [
@@ -358,6 +412,79 @@ class AgentSupportApiTest extends TestCase
 
         $ordersConv->refresh();
         $this->assertEquals($this->salesDept->id, $ordersConv->department_id);
+    }
+
+    /** @test */
+    public function department_scoped_agent_directory_excludes_another_departments_agent(): void
+    {
+        Sanctum::actingAs($this->ordersAgent);
+
+        $response = $this->getJson('/api/v1/support/agent/agents');
+        $response->assertStatus(200);
+
+        $agentEmails = collect($response->json('data'))->pluck('email')->toArray();
+
+        // Alex (Orders) and Sam (Orders+Billing) and Admin appear
+        $this->assertContains('alex@6ixculture.com', $agentEmails);
+        $this->assertContains('sam@6ixculture.com', $agentEmails);
+        $this->assertContains('admin@6ixculture.com', $agentEmails);
+
+        // Sarah (Sales only) must NOT appear in Alex's directory
+        $this->assertNotContains('sarah@6ixculture.com', $agentEmails);
+    }
+
+    /** @test */
+    public function elevated_directory_visibility_includes_all_agents(): void
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        $response = $this->getJson('/api/v1/support/agent/agents');
+        $response->assertStatus(200);
+
+        $agentEmails = collect($response->json('data'))->pluck('email')->toArray();
+
+        // Admin sees all agents across all departments
+        $this->assertContains('alex@6ixculture.com', $agentEmails);
+        $this->assertContains('sarah@6ixculture.com', $agentEmails);
+        $this->assertContains('sam@6ixculture.com', $agentEmails);
+        $this->assertContains('admin@6ixculture.com', $agentEmails);
+    }
+
+    /** @test */
+    public function directory_results_and_assignment_eligibility_agree(): void
+    {
+        Sanctum::actingAs($this->ordersAgent);
+
+        // 1. In directory, Alex can see Sam (Orders) but not Sarah (Sales)
+        $directoryResponse = $this->getJson('/api/v1/support/agent/agents');
+        $directoryEmails = collect($directoryResponse->json('data'))->pluck('email')->toArray();
+        $this->assertContains('sam@6ixculture.com', $directoryEmails);
+        $this->assertNotContains('sarah@6ixculture.com', $directoryEmails);
+
+        // 2. Orders conversation
+        $conv = SupportConversation::create([
+            'customer_id' => $this->customerUser->id,
+            'department_id' => $this->ordersDept->id,
+            'status' => ConversationStatus::QUEUED,
+            'priority' => SupportPriority::NORMAL,
+            'channel' => SupportChannel::WEB,
+            'mode' => ConversationMode::HUMAN,
+            'subject' => 'Directory consistency test',
+        ]);
+
+        // 3. Assigning to Sam (in directory) succeeds
+        $assignSam = $this->postJson("/api/v1/support/agent/conversations/{$conv->public_id}/assign", [
+            'agent_id' => $this->dualDeptAgent->id,
+        ]);
+        $assignSam->assertStatus(200)
+            ->assertJsonPath('data.assigned_agent.id', $this->dualDeptAgent->id);
+
+        // 4. Assigning to Sarah (excluded from directory) fails with 422
+        $assignSarah = $this->postJson("/api/v1/support/agent/conversations/{$conv->public_id}/assign", [
+            'agent_id' => $this->salesAgent->id,
+        ]);
+        $assignSarah->assertStatus(422)
+            ->assertJsonPath('error.code', 'UNAUTHORIZED_ASSIGNMENT_TARGET');
     }
 
     /** @test */

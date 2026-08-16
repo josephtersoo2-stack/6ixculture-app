@@ -178,6 +178,15 @@ class AgentSupportConversationController extends Controller
         $newAgentId = null;
 
         if ($targetAgentId === 'self' || $targetAgentId === 'me' || (is_numeric($targetAgentId) && (int)$targetAgentId === $user->id)) {
+            $eligibility = $this->isEligibleSupportAssignee($user, $conv->department_id);
+            if (!$eligibility['eligible']) {
+                return response()->json([
+                    'error' => [
+                        'code' => $eligibility['code'],
+                        'message' => $eligibility['message'],
+                    ]
+                ], 422);
+            }
             $newAgentId = $user->id;
         } elseif ($targetAgentId === null || $targetAgentId === 'unassigned' || $targetAgentId === '') {
             $newAgentId = null;
@@ -192,29 +201,14 @@ class AgentSupportConversationController extends Controller
                 ], 422);
             }
 
-            // Target must have active agent profile or elevated staff role (cannot be normal customer)
-            $targetProfile = SupportAgentProfile::where('user_id', $targetUser->id)->first();
-            $targetIsElevated = $this->isElevatedAgent($targetUser);
-            if (!$targetProfile && !$targetIsElevated) {
+            $eligibility = $this->isEligibleSupportAssignee($targetUser, $conv->department_id);
+            if (!$eligibility['eligible']) {
                 return response()->json([
                     'error' => [
-                        'code' => 'INVALID_ASSIGNMENT_TARGET',
-                        'message' => 'Assignment target must be an authorized support agent.',
+                        'code' => $eligibility['code'],
+                        'message' => $eligibility['message'],
                     ]
                 ], 422);
-            }
-
-            // If target is not elevated and conversation has a department, verify target agent is attached to that department
-            if (!$targetIsElevated && $conv->department_id) {
-                $targetDeptIds = $this->getAgentDepartmentIds($targetUser) ?? [];
-                if (!in_array($conv->department_id, $targetDeptIds)) {
-                    return response()->json([
-                        'error' => [
-                            'code' => 'UNAUTHORIZED_ASSIGNMENT_TARGET',
-                            'message' => 'Target agent is not authorized for this conversation department.',
-                        ]
-                    ], 422);
-                }
             }
 
             $newAgentId = $targetUser->id;
@@ -426,7 +420,7 @@ class AgentSupportConversationController extends Controller
     }
 
     /**
-     * Update conversation department.
+     * Update conversation department with source and target department authorization.
      */
     public function updateDepartment(UpdateConversationDepartmentRequest $request, string $conversation): JsonResponse
     {
@@ -454,6 +448,14 @@ class AgentSupportConversationController extends Controller
             ], 422);
         }
 
+        // Target department must be authorized for the acting user
+        if (!$this->isElevatedAgent($user)) {
+            $allowedDeptIds = $this->getAgentDepartmentIds($user) ?? [];
+            if (!in_array($dept->id, $allowedDeptIds)) {
+                return $this->errorForbidden('You are not authorized to transfer conversations to this department.');
+            }
+        }
+
         $previousDeptId = $conv->department_id;
         $updates = ['department_id' => $dept->id];
 
@@ -461,8 +463,8 @@ class AgentSupportConversationController extends Controller
         if ($conv->assigned_agent_id) {
             $assignedUser = User::find($conv->assigned_agent_id);
             if ($assignedUser && !$this->isElevatedAgent($assignedUser)) {
-                $assignedDeptIds = $this->getAgentDepartmentIds($assignedUser);
-                if (!in_array($dept->id, $assignedDeptIds ?? [])) {
+                $assignedDeptIds = $this->getAgentDepartmentIds($assignedUser) ?? [];
+                if (!in_array($dept->id, $assignedDeptIds)) {
                     $updates['assigned_agent_id'] = null;
                     $updates['status'] = ConversationStatus::QUEUED;
                     SupportAssignment::where('conversation_id', $conv->id)
@@ -718,7 +720,7 @@ class AgentSupportConversationController extends Controller
     }
 
     /**
-     * List active support agents for assignment dropdown.
+     * List active support agents for assignment dropdown within the acting agent's authorized scope.
      */
     public function agents(Request $request): JsonResponse
     {
@@ -727,19 +729,36 @@ class AgentSupportConversationController extends Controller
             return $this->errorForbidden();
         }
 
-        $agentUserIds = SupportAgentProfile::pluck('user_id')->toArray();
-        $query = User::whereIn('id', $agentUserIds);
+        $query = User::query();
 
-        try {
-            $staffIds = User::role(['Admin', 'Manager', 'Stuff', 'Support Agent'])->pluck('id')->toArray();
-            if (!empty($staffIds)) {
-                $query->orWhereIn('id', $staffIds);
-            }
-        } catch (\Throwable $e) {
-            // fallback
+        if ($this->isElevatedAgent($user)) {
+            // Elevated admins/managers can see all active agent profiles and elevated staff
+            $agentUserIds = SupportAgentProfile::pluck('user_id')->toArray();
+            $elevatedIds = [];
+            try {
+                $elevatedIds = User::role(['Admin', 'Manager'])->pluck('id')->toArray();
+            } catch (\Throwable $e) {}
+
+            $allEligibleIds = array_unique(array_merge($agentUserIds, $elevatedIds));
+            $query->whereIn('id', $allEligibleIds);
+        } else {
+            // Department-scoped agent: only see agents who share at least one authorized department, plus elevated staff
+            $actingDeptIds = $this->getAgentDepartmentIds($user) ?? [];
+
+            $sharedDeptUserIds = SupportAgentProfile::whereHas('departments', function ($q) use ($actingDeptIds) {
+                $q->whereIn('support_departments.id', $actingDeptIds);
+            })->pluck('user_id')->toArray();
+
+            $elevatedIds = [];
+            try {
+                $elevatedIds = User::role(['Admin', 'Manager'])->pluck('id')->toArray();
+            } catch (\Throwable $e) {}
+
+            $allEligibleIds = array_unique(array_merge($sharedDeptUserIds, $elevatedIds));
+            $query->whereIn('id', $allEligibleIds);
         }
 
-        $agents = $query->get();
+        $agents = $query->orderBy('name', 'asc')->get(['id', 'name', 'email']);
 
         return response()->json([
             'data' => $agents->map(function ($agent) {
@@ -750,6 +769,36 @@ class AgentSupportConversationController extends Controller
                 ];
             }),
         ], 200);
+    }
+
+    /**
+     * Check if a target user is an eligible support agent assignee for a conversation department.
+     */
+    protected function isEligibleSupportAssignee(User $targetUser, ?int $departmentId = null): array
+    {
+        $isElevated = $this->isElevatedAgent($targetUser);
+        $hasProfile = SupportAgentProfile::where('user_id', $targetUser->id)->exists();
+
+        if (!$isElevated && !$hasProfile) {
+            return [
+                'eligible' => false,
+                'code' => 'INVALID_ASSIGNMENT_TARGET',
+                'message' => 'Assignment target must be an authorized support agent.',
+            ];
+        }
+
+        if (!$isElevated && $departmentId !== null) {
+            $targetDeptIds = $this->getAgentDepartmentIds($targetUser) ?? [];
+            if (!in_array($departmentId, $targetDeptIds)) {
+                return [
+                    'eligible' => false,
+                    'code' => 'UNAUTHORIZED_ASSIGNMENT_TARGET',
+                    'message' => 'Target agent is not authorized for this conversation department.',
+                ];
+            }
+        }
+
+        return ['eligible' => true];
     }
 
     /**
