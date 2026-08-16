@@ -13,6 +13,7 @@
         <FrontendMobileAccountComponent />
         <FrontendCookiesComponent />
         <FrontendFooterComponent />
+        <AiSupportWidget />
     </div>
 
     <div v-if="theme === 'backend'">
@@ -42,6 +43,7 @@ import FrontendCookiesComponent from "./layouts/frontend/FrontendCookiesComponen
 import DisplayModeEnum from "../enums/modules/displayModeEnum";
 import LoadingComponent from "../components/frontend/components/LoadingComponent.vue";
 import BackendAiSidebarComponent from "./layouts/backend/BackendAiSidebarComponent.vue";
+import AiSupportWidget from "./frontend/support/AiSupportWidget.vue";
 
 export default {
     name: "DefaultComponent",
@@ -57,7 +59,8 @@ export default {
         BackendMenuComponent,
         FrontendCookiesComponent,
         BackendAiSidebarComponent,
-        LoadingComponent
+        LoadingComponent,
+        AiSupportWidget
     },
     data() {
         return {

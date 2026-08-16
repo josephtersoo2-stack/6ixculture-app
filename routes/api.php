@@ -967,3 +967,21 @@ Route::prefix('frontend')->name('frontend.')->middleware(['installed', 'apiKey',
 
     Route::match(['get', 'post'], '/payment/monnify/webhook', [\App\Http\Controllers\Frontend\MonnifyWebhookController::class, 'handle']);
 });
+
+/*
+|--------------------------------------------------------------------------
+| Support Domain Version 1 API Routes (6ixCulture Enterprise AI Support)
+|--------------------------------------------------------------------------
+*/
+Route::prefix('v1/support')->name('v1.support.')->middleware(['installed', 'apiKey', 'localization'])->group(function () {
+    Route::post('/conversations', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'store']);
+    Route::get('/conversations', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'index']);
+    Route::get('/conversations/{conversation}', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'show']);
+    Route::post('/conversations/{conversation}/messages', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'sendMessage']);
+    Route::get('/conversations/{conversation}/messages', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'getMessages']);
+    Route::get('/conversations/{conversation}/updates', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'getUpdates']);
+    Route::post('/conversations/{conversation}/request-human', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'requestHuman']);
+    Route::post('/conversations/{conversation}/resolve', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'resolve']);
+    Route::post('/conversations/{conversation}/actions/{action}', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'executeAction']);
+});
+
