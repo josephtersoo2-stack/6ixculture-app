@@ -25,11 +25,18 @@ class SupportConversationUpdated implements ShouldBroadcastNow
 
     public function broadcastOn(): array
     {
-        return [
+        $channels = [
             new PrivateChannel('support.conversation.' . $this->conversation->public_id),
+            new PrivateChannel('support.guest.conversation.' . $this->conversation->public_id),
             new PrivateChannel('support.agent.conversation.' . $this->conversation->public_id),
-            new PrivateChannel('support.agent.queue'),
+            new PrivateChannel('support.agent.queue'), // For elevated users
         ];
+
+        if ($this->conversation->department_id) {
+            $channels[] = new PrivateChannel('support.agent.department.' . $this->conversation->department_id);
+        }
+
+        return $channels;
     }
 
     public function broadcastAs(): string

@@ -1,15 +1,17 @@
-# 6ixCulture AI Support — Phase 6 Implementation Report
+# 6ixCulture AI Support — Phase 6 Implementation & Security Hardening Report
 
 **Repository:** `josephtersoo2-stack/6ixculture-app`  
 **Phase:** Phase 6 — Realtime Support Transport & Voice Interface  
-**Status:** FULLY IMPLEMENTED, VERIFIED & PASSING (100%)  
-**Date:** August 16, 2026  
+**Status:** FULLY IMPLEMENTED, HARDENED & VERIFIED (100% PASS)  
+**Date:** August 17, 2026  
 
 ---
 
 ## 1. Executive Summary
 
-Phase 6 implements the **Realtime Support Transport** and **Multilingual Voice Interface** for 6ixCulture. In accordance with the canonical architecture, realtime broadcasting and voice interaction operate strictly as transport and interface acceleration layers over the authoritative `SupportConversation` and `SupportOrchestrator` core:
+Phase 6 implements the **Realtime Support Transport** and **Multilingual Voice Interface** for 6ixCulture, followed by a **Targeted Realtime Authorization Security Hardening Pass**.
+
+In strict accordance with the canonical architecture, realtime broadcasting and voice interaction operate solely as transport and interface layers over the authoritative `SupportConversation` and `SupportOrchestrator` core:
 
 ```text
 Customer Storefront / Agent Workspace
@@ -35,119 +37,108 @@ Realtime Event Broadcast       Text-to-Speech (TTS)
 
 ---
 
-## 2. Realtime Transport Architecture & Channel Authorization
+## 2. Phase 6 Realtime Authorization Hardening
 
-### A. Provider-Neutral Event Broadcasting
-All realtime events implement `ShouldBroadcastNow` and are dispatched on dedicated Laravel private broadcast channels with explicit DTO-style serialization via `broadcastWith()`.
+During the security hardening pass, channel authorization callbacks in `routes/channels.php` and broadcast event routing were updated to close two critical scope gaps:
 
-| Event Class | Channel Pattern | Trigger / Description |
+### A. Global Agent Queue Scope Restriction (`support.agent.queue`)
+- **Vulnerability Remediated:** Previously, any user with an active `SupportAgentProfile` could subscribe to `support.agent.queue`, which violated the Phase 5 department-boundary authorization model.
+- **Enforced Model:**
+  - **Elevated Users (`Admin`, `Manager`):** Permitted to subscribe to `support.agent.queue` for global operations.
+  - **Non-Elevated Department-Scoped Agents:** **Strictly denied** on `support.agent.queue`. They must subscribe only to `support.agent.department.{departmentId}` for departments in their authorized `SupportAgentProfile` department set.
+  - **Customer Accounts:** Strictly denied on all agent queue channels.
+
+### B. Guest Realtime Authentication (`support.guest.conversation.{publicId}`)
+- **Vulnerability Remediated:** Previously, guest realtime subscription had no direct token verification path since Laravel private channels typically assume authenticated `$user`.
+- **Enforced Model:**
+  - Dedicated guest channel: `support.guest.conversation.{publicId}`.
+  - Authenticates subscription by verifying `X-Guest-Token` against `$conversation->guest_session_id` using constant-time comparison (`hash_equals`).
+  - Missing token, invalid token, or a token belonging to another conversation is **strictly rejected**.
+  - Guest tokens are **never exposed** in broadcast payloads, logs, or client events.
+
+### C. Complete Channel Authorization Matrix (`routes/channels.php`)
+
+| Channel Pattern | Authorized Entities | Unauthorized / Rejected Entities |
 | :--- | :--- | :--- |
-| `SupportMessageCreated` | `private-support.conversation.{publicId}`<br>`private-support.agent.conversation.{publicId}` | Dispatched on every customer or agent message. Internal staff notes broadcast exclusively to the agent channel. |
-| `SupportConversationUpdated` | `private-support.conversation.{publicId}`<br>`private-support.agent.conversation.{publicId}`<br>`private-support.agent.queue` | Dispatched on status change, escalation, assignment, or resolution. |
-| `SupportQueueUpdated` | `private-support.agent.queue`<br>`private-support.agent.department.{deptId}` | Broadcasts queue arrival, transfers, and status changes to active agents. |
-| `SupportAgentPresenceChanged` | `private-support.agent.presence`<br>`private-support.agent.queue` | Broadcasts agent status (`online`, `busy`, `away`, `offline`) and availability. |
-
-### B. Channel Authorization Boundary (`routes/channels.php`)
-Channel authorization is strictly enforced at the backend:
-- **Customer Conversations (`support.conversation.{publicId}`)**:
-  - **Authenticated Customer:** Verified via `$conversation->customer_id === $user->id`.
-  - **Guest User:** Verified via `X-Guest-Token` header / session ID matching `$conversation->guest_session_id`.
-  - **Support Agent:** Permitted if assigned or scoped to conversation's department.
-  - **Elevated User:** `Admin` and `Manager` roles receive elevated access.
-- **Agent Channels (`support.agent.conversation.{publicId}` & `support.agent.queue`)**:
-  - Regular customer accounts (`Role: Customer` without agent profile) are **strictly forbidden**.
-  - Department-scoped agents are restricted to authorized departments.
-
-### C. Payload Safety & Secret Sanitization
-Broadcast payloads strictly exclude:
-- Private internal staff notes (isolated from customer channels).
-- User passwords, authentication tokens, API keys, and session cookies.
-- System prompts, raw audit log internals, and tool registry schemas.
+| `support.conversation.{publicId}` | Authenticated customer owner, assigned agent, authorized department agent, elevated Admin/Manager. | Other customers, unauthorized agents from other departments, unauthenticated guests. |
+| `support.guest.conversation.{publicId}` | Guest caller with valid `X-Guest-Token` matching `conversation.guest_session_id`. | Missing token, incorrect token, cross-conversation tokens. |
+| `support.agent.conversation.{publicId}` | Assigned agent, authorized department agent, elevated Admin/Manager. | All customer accounts, unauthorized agents from other departments. |
+| `support.agent.queue` | Elevated `Admin` and `Manager` roles only. | Non-elevated department-scoped agents, customer accounts. |
+| `support.agent.department.{departmentId}` | Support agents belonging to `{departmentId}`, elevated Admin/Manager. | Non-member agents, customer accounts. |
+| `support.agent.presence` | Active support agents with profile, elevated staff. | Customer accounts. |
 
 ---
 
-## 3. Voice Subsystem Architecture
+## 3. Realtime Event Catalog & Payload Safety
 
-### A. Speech-to-Text (STT) Abstraction
-- **Contract:** `App\Support\Contracts\SpeechToTextInterface`
-- **Adapters:**
-  - `OpenAiWhisperSttAdapter`: High-accuracy transcription with support for multilingual speech, size limits (max 10MB), and duration capping (max 120s).
-  - `GeminiSttAdapter`: Multimodal inline audio transcription via Gemini Flash API.
-- **Factory:** `VoiceProviderFactory::makeStt()` dynamically selects provider based on active AI agent configuration.
+All broadcast events implement `ShouldBroadcastNow` with explicit DTO-style `broadcastWith()` payloads:
 
-### B. Text-to-Speech (TTS) Abstraction
-- **Contract:** `App\Support\Contracts\TextToSpeechInterface`
-- **Adapters:**
-  - `OpenAiTtsAdapter`: Natural voice synthesis (`alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer`) returning base64/URL streams.
-  - Synthesizes **strictly customer-visible text** (never system prompts, tool calls, or internal notes).
-- **Factory:** `VoiceProviderFactory::makeTts()` handles synthesis resolution.
-
-### C. Multilingual Support (`en`, `yo`, `ig`, `ha`)
-- Full multilingual plumbing supports English (`en`), Yoruba (`yo`), Igbo (`ig`), and Hausa (`ha`).
-- Voice transcripts and TTS responses honor conversation language with safe fallback to English when provider dialects are unavailable.
-- Internal intent IDs and tool parameters remain language-neutral.
-
-### D. Interruption Handling & Clean Cancellation
-- When a user speaks while TTS audio is playing, `interruptVoice` pauses the active HTML5 Audio stream and dispatches `POST /api/v1/support/conversations/{id}/voice/interrupt`.
-- Safely resets voice state to `idle` without corrupting conversation history or creating duplicate turns.
+| Event Class | Channel Distribution | Payload Safety Boundary |
+| :--- | :--- | :--- |
+| `SupportMessageCreated` | `is_internal = true` $\rightarrow$ `support.agent.conversation.{id}`<br>`is_internal = false` $\rightarrow$ `support.conversation.{id}`, `support.guest.conversation.{id}`, `support.agent.conversation.{id}` | Internal staff notes are **never** broadcast to customer or guest channels. Excludes tokens, secrets, credentials, and raw audit internals. |
+| `SupportConversationUpdated` | `support.conversation.{id}`, `support.guest.conversation.{id}`, `support.agent.conversation.{id}`, `support.agent.queue`, `support.agent.department.{deptId}` | Excludes internal routing data; provides public status/mode/priority/department metrics. |
+| `SupportQueueUpdated` | `support.agent.queue` (elevated), `support.agent.department.{deptId}` (department-scoped) | Department queue events are routed directly to authorized departments; excludes customer secrets. |
+| `SupportAgentPresenceChanged` | `support.agent.presence`, `support.agent.queue` | Exposes minimal advisory metrics (`agent_id`, `agent_name`, `status`, `availability`, `timestamp`). No customer data. |
 
 ---
 
-## 4. Voice REST API Endpoints
+## 4. Voice Subsystem Architecture
 
-| Method | Endpoint | Description | Scope |
-| :--- | :--- | :--- | :--- |
-| `POST` | `/api/v1/support/conversations/{conversation}/voice/sessions` | Start voice session | Customer / Guest / Agent |
-| `GET` | `/api/v1/support/conversations/{conversation}/voice/sessions/{session}` | Get session metrics | Customer / Guest / Agent |
-| `POST` | `/api/v1/support/conversations/{conversation}/voice/sessions/{session}/end` | Conclude session | Customer / Guest / Agent |
-| `POST` | `/api/v1/support/conversations/{conversation}/voice/process` | Process voice turn (STT $\rightarrow$ Orchestrator $\rightarrow$ TTS) | Customer / Guest / Agent |
-| `POST` | `/api/v1/support/conversations/{conversation}/voice/interrupt` | Cancel TTS playback cleanly | Customer / Guest / Agent |
-| `POST` | `/api/v1/support/agent/presence` | Update agent availability presence | Authenticated Agent |
+### A. STT & TTS Provider Abstractions
+- **STT Contract:** `App\Support\Contracts\SpeechToTextInterface` implemented by `OpenAiWhisperSttAdapter` (file size $\le$ 10MB, duration $\le$ 120s) and `GeminiSttAdapter`.
+- **TTS Contract:** `App\Support\Contracts\TextToSpeechInterface` implemented by `OpenAiTtsAdapter` (`nova` voice, Markdown-stripped text synthesis).
+- **Factory:** `VoiceProviderFactory` resolves providers dynamically based on DB settings and environment keys.
+
+### B. Canonical Processing Flow
+- Voice turns received via `POST /api/v1/support/conversations/{id}/voice/process` are transcribed $\rightarrow$ saved as canonical `SupportMessage` (`MessageType::VOICE_TRANSCRIPT`) $\rightarrow$ processed through `SupportOrchestrator` $\rightarrow$ synthesized to audio for client playback.
+- **Multilingual Support:** English (`en`), Yoruba (`yo`), Igbo (`ig`), and Hausa (`ha`).
+- **Clean Interruption:** `POST /api/v1/support/conversations/{id}/voice/interrupt` cleanly cancels audio synthesis playback without orphan messages or bypassed state.
 
 ---
 
 ## 5. UI Integration & Transparent Polling Fallback
 
-### A. Customer Assistant Widget (`MessageComposer.vue`, `AiSupportWidget.vue`)
-- Interactive microphone button with pulsing live recording animation and elapsed seconds timer.
-- Finish & send, cancel, and live audio response playback with "Stop Audio" interrupt controls.
-- Automatic subscription to private conversation channel with **6-second transparent polling fallback**.
-
-### B. Agent Console Workspace (`adminSupport.js`, `SupportCenterComponent.vue`)
-- Realtime queue listener for `support.queue.updated` and `support.agent.presence.changed`.
-- Automatic **8-second transparent polling fallback**.
+1. **Customer Assistant Widget (`AiSupportWidget.vue`, `MessageComposer.vue`, `frontendSupport.js`)**:
+   - Microphone record/stop/cancel controls with recording wave animation and elapsed timer.
+   - Assistant speaking bar with "Stop Audio" interrupt trigger.
+   - Realtime channel listener with **6-second transparent polling fallback**.
+2. **Agent Console Workspace (`adminSupport.js`, `SupportCenterComponent.vue`)**:
+   - Subscribes to `support.agent.department.{deptId}` and `support.agent.presence` with **8-second transparent polling fallback**.
 
 ---
 
 ## 6. Automated Test Verification Results
 
-All 78 unit and feature tests across the application passed with 299 assertions and 0 failures:
+All 84 unit and feature tests across the entire application passed with 323 assertions and 0 failures:
 
 ```powershell
-& "C:\xampp\php\php.exe" artisan test --filter=Support
+& "C:\xampp\php\php.exe" artisan test tests/Feature/Support/RealtimeAuthorizationTest.php
+& "C:\xampp\php\php.exe" artisan test tests/Feature/Support/SupportVoiceTest.php
+& "C:\xampp\php\php.exe" artisan test tests/Feature/Support tests/Unit/Support
 & "C:\xampp\php\php.exe" artisan test
 & "C:\xampp\php\php.exe" artisan route:list --path=v1/support
 ```
 
-### Test Suite Execution Summary:
-- **Realtime Authorization Tests:** 8 passed (18 assertions)
-- **Support Voice Tests:** 8 passed (31 assertions)
-- **Agent Support Tests:** 20 passed (70 assertions)
-- **Support Domain Total:** 76 passed (297 assertions)
-- **Application Total:** 78 passed (299 assertions, 0 failures, 0 regressions)
+### Exact Test Output Summary:
 
 ```text
-PASS  Tests\Feature\Support\RealtimeAuthorizationTest
+PASS  Tests\Feature\Support\RealtimeAuthorizationTest (14 tests, 42 assertions)
   ✓ customer can authorize own conversation channel
   ✓ customer is denied another customers conversation channel
+  ✓ guest realtime authorization with valid token
+  ✓ guest realtime authorization with wrong or missing token is denied
+  ✓ guest token cannot authorize another conversation
   ✓ department scoped agent can authorize conversation in own department
   ✓ assigned agent can authorize even if outside department
-  ✓ elevated admin can authorize any conversation
-  ✓ agent queue channel authorization
+  ✓ elevated admin and manager can authorize any conversation
+  ✓ department scoped agent is denied global queue
+  ✓ elevated admin and manager are allowed global queue
   ✓ department queue channel authorization
-  ✓ internal notes are strictly isolated from customer channels
+  ✓ internal notes are strictly isolated from customer and guest channels
+  ✓ customer visible messages broadcast to customer guest and agent channels
+  ✓ presence event exposes minimal safe agent data
 
-PASS  Tests\Feature\Support\SupportVoiceTest
+PASS  Tests\Feature\Support\SupportVoiceTest (8 tests, 31 assertions)
   ✓ unauthenticated request without guest token is forbidden
   ✓ authenticated customer can start and end voice session
   ✓ guest with valid token can start voice session
@@ -156,20 +147,32 @@ PASS  Tests\Feature\Support\SupportVoiceTest
   ✓ voice interruption safely resets voice state
   ✓ stt failure returns safe error without damaging conversation
   ✓ multilingual voice request en yo ig ha persists language metadata
+
+PASS  Tests\Feature\Support\AgentSupportApiTest (20 tests, 70 assertions)
+PASS  Tests\Feature\Support\SupportApiTest (16 tests, 61 assertions)
+PASS  Tests\Feature\Support\SupportAuthorizationTest (4 tests, 12 assertions)
+PASS  Tests\Feature\Support\SupportKnowledgeGroundingTest (5 tests, 21 assertions)
+PASS  Tests\Feature\Support\SupportOrchestratorTest (7 tests, 51 assertions)
+PASS  Tests\Feature\Support\SupportSeederTest (1 test, 14 assertions)
+PASS  Tests\Unit\Support\SupportAuditLogTest (1 test, 5 assertions)
+PASS  Tests\Unit\Support\SupportModelTest (6 tests, 14 assertions)
+
+Total Tests: 84 passed (323 assertions, 0 failures, 0 regressions)
+Duration: 23.60s
 ```
 
 ---
 
 ## 7. Invariants Preserved
 
-- Legacy chat controllers (`ChatController`, `AdminChatController`, `ChatService`, `ChatMessage`, `ChatConversation`) remain completely untouched and fully functional.
+- Legacy chat systems (`ChatController`, `AdminChatController`, `ChatService`, `ChatMessage`, `ChatConversation`) remain completely untouched.
 - No omnichannel (WhatsApp/email/phone) integrations were added.
-- No arbitrary AI tools or unauthorized commerce mutations (cancellations/refunds) were created.
-- No legacy data deletion or production cutover was performed.
+- No arbitrary AI commerce mutations (cancellations/refunds) exist without strict policy checks.
+- No production cutover or legacy deletion was performed.
 
 ---
 
 ## 8. Status
 
-**PHASE 6 = COMPLETE**  
-Ready for Phase 6 review and approval.
+**PHASE 6 SECURITY HARDENING = COMPLETE**  
+Ready for Phase 6 approval.

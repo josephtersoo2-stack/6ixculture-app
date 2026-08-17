@@ -9,12 +9,16 @@ use App\Support\Enums\MessageType;
 use App\Support\Enums\SenderType;
 use App\Support\Enums\SupportChannel;
 use App\Support\Enums\SupportPriority;
+use App\Support\Events\SupportAgentPresenceChanged;
+use App\Support\Events\SupportConversationUpdated;
 use App\Support\Events\SupportMessageCreated;
+use App\Support\Events\SupportQueueUpdated;
 use App\Support\Models\SupportAgentProfile;
 use App\Support\Models\SupportConversation;
 use App\Support\Models\SupportDepartment;
 use App\Support\Models\SupportMessage;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Broadcast;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
@@ -28,6 +32,7 @@ class RealtimeAuthorizationTest extends TestCase
     protected User $agent1;
     protected User $agent2;
     protected User $adminUser;
+    protected User $managerUser;
     protected SupportDepartment $deptReturns;
     protected SupportDepartment $deptSales;
 
@@ -60,6 +65,13 @@ class RealtimeAuthorizationTest extends TestCase
             'username' => 'adminboss',
         ]);
         $this->adminUser->assignRole('Admin');
+
+        $this->managerUser = User::factory()->create([
+            'name' => 'Manager Lead',
+            'email' => 'manager@example.com',
+            'username' => 'managerlead',
+        ]);
+        $this->managerUser->assignRole('Manager');
 
         $this->deptReturns = SupportDepartment::create([
             'name' => 'Returns & Refunds',
@@ -138,6 +150,80 @@ class RealtimeAuthorizationTest extends TestCase
         $this->assertFalse((bool)$callback($this->customer2, $conv->public_id));
     }
 
+    public function test_guest_realtime_authorization_with_valid_token(): void
+    {
+        $guestConv = SupportConversation::create([
+            'guest_session_id' => 'valid-secret-guest-token-12345',
+            'status' => ConversationStatus::AI_ACTIVE,
+            'mode' => ConversationMode::AI,
+            'channel' => SupportChannel::WEB,
+            'priority' => SupportPriority::NORMAL,
+        ]);
+
+        $callback = $this->getChannelCallback('support.guest.conversation.{publicId}');
+        $this->assertNotNull($callback);
+
+        // Simulate request with header X-Guest-Token
+        $request = Request::create('/broadcasting/auth', 'POST', [], [], [], [
+            'HTTP_X_GUEST_TOKEN' => 'valid-secret-guest-token-12345',
+        ]);
+        $this->app->instance('request', $request);
+
+        $this->assertTrue((bool)$callback(null, $guestConv->public_id));
+    }
+
+    public function test_guest_realtime_authorization_with_wrong_or_missing_token_is_denied(): void
+    {
+        $guestConv = SupportConversation::create([
+            'guest_session_id' => 'valid-secret-guest-token-12345',
+            'status' => ConversationStatus::AI_ACTIVE,
+            'mode' => ConversationMode::AI,
+            'channel' => SupportChannel::WEB,
+            'priority' => SupportPriority::NORMAL,
+        ]);
+
+        $callback = $this->getChannelCallback('support.guest.conversation.{publicId}');
+
+        // 1. Missing token
+        $requestMissing = Request::create('/broadcasting/auth', 'POST');
+        $this->app->instance('request', $requestMissing);
+        $this->assertFalse((bool)$callback(null, $guestConv->public_id));
+
+        // 2. Wrong token
+        $requestWrong = Request::create('/broadcasting/auth', 'POST', [], [], [], [
+            'HTTP_X_GUEST_TOKEN' => 'wrong-token-999',
+        ]);
+        $this->app->instance('request', $requestWrong);
+        $this->assertFalse((bool)$callback(null, $guestConv->public_id));
+    }
+
+    public function test_guest_token_cannot_authorize_another_conversation(): void
+    {
+        $guestConv1 = SupportConversation::create([
+            'guest_session_id' => 'token-conversation-one',
+            'status' => ConversationStatus::AI_ACTIVE,
+            'mode' => ConversationMode::AI,
+            'channel' => SupportChannel::WEB,
+        ]);
+
+        $guestConv2 = SupportConversation::create([
+            'guest_session_id' => 'token-conversation-two',
+            'status' => ConversationStatus::AI_ACTIVE,
+            'mode' => ConversationMode::AI,
+            'channel' => SupportChannel::WEB,
+        ]);
+
+        $callback = $this->getChannelCallback('support.guest.conversation.{publicId}');
+
+        // Token 1 passed to Conversation 2
+        $request = Request::create('/broadcasting/auth', 'POST', [], [], [], [
+            'HTTP_X_GUEST_TOKEN' => 'token-conversation-one',
+        ]);
+        $this->app->instance('request', $request);
+
+        $this->assertFalse((bool)$callback(null, $guestConv2->public_id));
+    }
+
     public function test_department_scoped_agent_can_authorize_conversation_in_own_department(): void
     {
         $conv = SupportConversation::create([
@@ -176,7 +262,7 @@ class RealtimeAuthorizationTest extends TestCase
         $this->assertTrue((bool)$callback($this->agent2, $conv->public_id));
     }
 
-    public function test_elevated_admin_can_authorize_any_conversation(): void
+    public function test_elevated_admin_and_manager_can_authorize_any_conversation(): void
     {
         $conv = SupportConversation::create([
             'customer_id' => $this->customer1->id,
@@ -190,18 +276,29 @@ class RealtimeAuthorizationTest extends TestCase
         $callback = $this->getChannelCallback('support.conversation.{publicId}');
 
         $this->assertTrue((bool)$callback($this->adminUser, $conv->public_id));
+        $this->assertTrue((bool)$callback($this->managerUser, $conv->public_id));
     }
 
-    public function test_agent_queue_channel_authorization(): void
+    public function test_department_scoped_agent_is_denied_global_queue(): void
     {
         $callback = $this->getChannelCallback('support.agent.queue');
+        $this->assertNotNull($callback);
 
-        // Agents and admins allowed
-        $this->assertTrue((bool)$callback($this->agent1));
-        $this->assertTrue((bool)$callback($this->adminUser));
+        // Non-elevated department-scoped agents MUST be denied global queue
+        $this->assertFalse((bool)$callback($this->agent1));
+        $this->assertFalse((bool)$callback($this->agent2));
 
         // Normal customer denied
         $this->assertFalse((bool)$callback($this->customer1));
+    }
+
+    public function test_elevated_admin_and_manager_are_allowed_global_queue(): void
+    {
+        $callback = $this->getChannelCallback('support.agent.queue');
+
+        // Elevated Admin and Manager allowed
+        $this->assertTrue((bool)$callback($this->adminUser));
+        $this->assertTrue((bool)$callback($this->managerUser));
     }
 
     public function test_department_queue_channel_authorization(): void
@@ -212,15 +309,48 @@ class RealtimeAuthorizationTest extends TestCase
         $this->assertTrue((bool)$callback($this->agent1, $this->deptReturns->id));
         $this->assertFalse((bool)$callback($this->agent1, $this->deptSales->id));
 
-        // Elevated admin allowed on any department
+        // Agent 2 belongs to deptSales
+        $this->assertTrue((bool)$callback($this->agent2, $this->deptSales->id));
+        $this->assertFalse((bool)$callback($this->agent2, $this->deptReturns->id));
+
+        // Elevated admin and manager allowed on any department
         $this->assertTrue((bool)$callback($this->adminUser, $this->deptReturns->id));
         $this->assertTrue((bool)$callback($this->adminUser, $this->deptSales->id));
+        $this->assertTrue((bool)$callback($this->managerUser, $this->deptReturns->id));
 
         // Customer denied
         $this->assertFalse((bool)$callback($this->customer1, $this->deptReturns->id));
     }
 
-    public function test_internal_notes_are_strictly_isolated_from_customer_channels(): void
+    public function test_internal_notes_are_strictly_isolated_from_customer_and_guest_channels(): void
+    {
+        $conv = SupportConversation::create([
+            'customer_id' => $this->customer1->id,
+            'status' => ConversationStatus::HUMAN_ACTIVE,
+            'mode' => ConversationMode::HUMAN,
+            'channel' => SupportChannel::WEB,
+            'priority' => SupportPriority::NORMAL,
+        ]);
+
+        $internalNote = SupportMessage::create([
+            'conversation_id' => $conv->id,
+            'sender_type' => SenderType::AGENT,
+            'sender_id' => $this->agent1->id,
+            'message_type' => MessageType::INTERNAL_NOTE,
+            'content' => 'Private staff verification note.',
+            'is_internal' => true,
+        ]);
+
+        $internalEvent = new SupportMessageCreated($internalNote);
+        $internalChannels = array_map(fn($c) => $c->name, $internalEvent->broadcastOn());
+
+        // Internal note event MUST NOT broadcast on customer or guest channels
+        $this->assertNotContains('private-support.conversation.' . $conv->public_id, $internalChannels);
+        $this->assertNotContains('private-support.guest.conversation.' . $conv->public_id, $internalChannels);
+        $this->assertContains('private-support.agent.conversation.' . $conv->public_id, $internalChannels);
+    }
+
+    public function test_customer_visible_messages_broadcast_to_customer_guest_and_agent_channels(): void
     {
         $conv = SupportConversation::create([
             'customer_id' => $this->customer1->id,
@@ -239,26 +369,31 @@ class RealtimeAuthorizationTest extends TestCase
             'is_internal' => false,
         ]);
 
-        $internalNote = SupportMessage::create([
-            'conversation_id' => $conv->id,
-            'sender_type' => SenderType::AGENT,
-            'sender_id' => $this->agent1->id,
-            'message_type' => MessageType::INTERNAL_NOTE,
-            'content' => 'Private staff verification note.',
-            'is_internal' => true,
-        ]);
-
         $customerEvent = new SupportMessageCreated($customerMsg);
         $customerChannels = array_map(fn($c) => $c->name, $customerEvent->broadcastOn());
 
-        // Customer event broadcasts on public conversation channel
+        // Customer message reaches authenticated, guest, and agent conversation channels
         $this->assertContains('private-support.conversation.' . $conv->public_id, $customerChannels);
+        $this->assertContains('private-support.guest.conversation.' . $conv->public_id, $customerChannels);
+        $this->assertContains('private-support.agent.conversation.' . $conv->public_id, $customerChannels);
 
-        $internalEvent = new SupportMessageCreated($internalNote);
-        $internalChannels = array_map(fn($c) => $c->name, $internalEvent->broadcastOn());
+        // Payload safety checks: must not contain secrets or internal flags as true
+        $payload = $customerEvent->broadcastWith();
+        $this->assertFalse($payload['is_internal']);
+        $this->assertArrayNotHasKey('guest_token', $payload);
+        $this->assertArrayNotHasKey('secret', $payload);
+    }
 
-        // Internal note event MUST NOT broadcast on customer channel
-        $this->assertNotContains('private-support.conversation.' . $conv->public_id, $internalChannels);
-        $this->assertContains('private-support.agent.conversation.' . $conv->public_id, $internalChannels);
+    public function test_presence_event_exposes_minimal_safe_agent_data(): void
+    {
+        $event = new SupportAgentPresenceChanged($this->agent1, 'online', 'available');
+        $payload = $event->broadcastWith();
+
+        $this->assertEquals($this->agent1->id, $payload['agent_id']);
+        $this->assertEquals($this->agent1->name, $payload['agent_name']);
+        $this->assertEquals('online', $payload['status']);
+        $this->assertEquals('available', $payload['availability']);
+        $this->assertArrayNotHasKey('customer_id', $payload);
+        $this->assertArrayNotHasKey('token', $payload);
     }
 }

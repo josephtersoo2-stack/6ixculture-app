@@ -28,16 +28,17 @@ class SupportMessageCreated implements ShouldBroadcastNow
      */
     public function broadcastOn(): array
     {
-        // If it is an internal staff note, only broadcast to the agent-specific channel
+        // If it is an internal staff note, ONLY broadcast to the agent-specific channel
         if ($this->message->is_internal) {
             return [
                 new PrivateChannel('support.agent.conversation.' . $this->conversationPublicId),
             ];
         }
 
-        // Customer-visible messages broadcast to the shared conversation channel
+        // Customer-visible messages broadcast to authenticated, guest, and agent channels
         return [
             new PrivateChannel('support.conversation.' . $this->conversationPublicId),
+            new PrivateChannel('support.guest.conversation.' . $this->conversationPublicId),
             new PrivateChannel('support.agent.conversation.' . $this->conversationPublicId),
         ];
     }
@@ -51,7 +52,7 @@ class SupportMessageCreated implements ShouldBroadcastNow
     }
 
     /**
-     * Sanitized DTO-style broadcast payload.
+     * Sanitized DTO-style broadcast payload (strictly excludes secrets, internal notes, tokens).
      */
     public function broadcastWith(): array
     {
