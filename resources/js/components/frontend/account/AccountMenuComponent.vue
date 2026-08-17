@@ -59,6 +59,14 @@
                     class="lab lab-fill-location text-[#A0A3BD] group-hover:text-primary transition-all duration-500"></i>
                 <span>{{ $t('menu.address') }}</span>
             </router-link>
+
+            <router-link
+                class="profile-link font-medium flex items-center gap-4 capitalize py-3 px-4 group hover:text-primary transition-all duration-500"
+                :to="{ name: 'frontend.account.support' }">
+                <i
+                    class="lab lab-fill-messages text-[#A0A3BD] group-hover:text-primary transition-all duration-500"></i>
+                <span>{{ $t('menu.customer_support') || 'Customer Support' }}</span>
+            </router-link>
         </nav>
     </div>
 </template>

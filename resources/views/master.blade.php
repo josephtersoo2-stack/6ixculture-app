@@ -9,6 +9,10 @@
 
     <!-- CUSTOM STYLE -->
     <link rel="stylesheet" href="{{ asset('themes/default/css/custom.css') }}">
+    <link rel="stylesheet" href="{{ asset('themes/default/fonts/urbanist/urbanist.css') }}">
+    <link rel="stylesheet" href="{{ asset('themes/default/fonts/iconly/iconly.css') }}">
+    <link rel="stylesheet" href="{{ asset('themes/default/fonts/public/public.css') }}">
+    <link rel="stylesheet" href="{{ asset('themes/default/fonts/fontawesome/fontawesome.css') }}">
     <!-- PAGE TITLE -->
     <title>{{ Settings::group('company')->get('company_name') }}</title>
 
@@ -16,7 +20,7 @@
     <link rel="icon" type="image" href="{{ $favicon }}">
 
     <script>
-        var APP_URL = "{{ url('/') }}";
+        var APP_URL = window.location.origin;
         var APP_DEMO = "{{ env('VITE_DEMO', false) }}";
         var APP_KEY = "{{ env('VITE_API_KEY', '') }}";
     </script>

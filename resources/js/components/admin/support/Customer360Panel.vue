@@ -32,6 +32,46 @@
                 :conversation="conversation"
                 :agents="agents"
             />
+
+            <!-- 5. Quick Actions Panel (Blueprint Section 9) -->
+            <div class="p-4 border-t border-gray-200 dark:border-gray-800 space-y-3">
+                <div class="text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                    Quick Actions
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <button
+                        @click="handleQuickAction('track_order')"
+                        class="p-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-slate-50 dark:bg-gray-800/60 hover:bg-white dark:hover:bg-gray-800 text-[11px] font-bold text-gray-700 dark:text-gray-200 flex items-center gap-1.5 transition-colors shadow-2xs"
+                    >
+                        <i class="lab lab-line-truck-check text-indigo-500"></i>
+                        <span>Track Order</span>
+                    </button>
+
+                    <button
+                        @click="handleQuickAction('initiate_return')"
+                        class="p-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-slate-50 dark:bg-gray-800/60 hover:bg-white dark:hover:bg-gray-800 text-[11px] font-bold text-gray-700 dark:text-gray-200 flex items-center gap-1.5 transition-colors shadow-2xs"
+                    >
+                        <i class="lab lab-line-undo text-amber-500"></i>
+                        <span>Initiate Return</span>
+                    </button>
+
+                    <button
+                        @click="handleQuickAction('issue_refund')"
+                        class="p-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-slate-50 dark:bg-gray-800/60 hover:bg-white dark:hover:bg-gray-800 text-[11px] font-bold text-gray-700 dark:text-gray-200 flex items-center gap-1.5 transition-colors shadow-2xs"
+                    >
+                        <i class="lab lab-fill-moneys text-emerald-500"></i>
+                        <span>Issue Refund</span>
+                    </button>
+
+                    <button
+                        @click="handleQuickAction('send_coupon')"
+                        class="p-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-slate-50 dark:bg-gray-800/60 hover:bg-white dark:hover:bg-gray-800 text-[11px] font-bold text-gray-700 dark:text-gray-200 flex items-center gap-1.5 transition-colors shadow-2xs"
+                    >
+                        <i class="lab lab-fill-ticket-discount text-rose-500"></i>
+                        <span>Send Coupon</span>
+                    </button>
+                </div>
+            </div>
         </template>
 
         <div v-else class="p-8 text-center text-xs text-gray-400">
@@ -74,6 +114,15 @@ export default {
         agents: {
             type: Array,
             default: () => [],
+        },
+    },
+    methods: {
+        handleQuickAction(actionType) {
+            if (!this.conversation) return;
+            this.$store.dispatch('adminSupport/executeAction', {
+                action: actionType,
+                conversation_id: this.conversation.public_id,
+            });
         },
     },
 };

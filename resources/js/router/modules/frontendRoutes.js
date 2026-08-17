@@ -1,4 +1,5 @@
 import  HomeComponent from "../../components/frontend/home/HomeComponent";
+const  CustomerSupportComponent = () => import("../../components/frontend/account/support/CustomerSupportComponent.vue");
 const  WishlistComponent = () => import("../../components/frontend/wishlist/WishlistComponent");
 const  OrderHistoryComponent = () => import("../../components/frontend/account/orderHistory/OrderHistoryComponent");
 const  ReturnOrdersComponent = () => import("../../components/frontend/account/returnOrders/ReturnOrdersComponent");
@@ -238,7 +239,16 @@ export default [
                     isFrontend: true,
                     auth: true,
                 },
-            }
+            },
+            {
+                path: "support",
+                component: CustomerSupportComponent,
+                name: "frontend.account.support",
+                meta: {
+                    isFrontend: true,
+                    auth: true,
+                },
+            },
         ]
     },
     {

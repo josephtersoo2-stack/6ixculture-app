@@ -33,6 +33,13 @@
                         <i class="lab lab-fill-pos lab-font-size-16 font-fill-pos"></i>
                     </router-link>
 
+                    <router-link
+                        class="w-9 h-9 rounded-lg flex items-center justify-center text-emerald-600 bg-emerald-50 hover:bg-emerald-100 transition-colors shadow-2xs"
+                        :to="{ path: '/admin/support' }"
+                        title="AI Support Console">
+                        <i class="lab lab-line-messages-2 text-base"></i>
+                    </router-link>
+
                     <!-- Dark Mode Toggle Start -->
                     <NavbarComponent />
                     <!-- Dark Mode Toggle End -->
@@ -84,6 +91,18 @@
                             class="paper-link transition w-full flex items-center gap-3.5 py-3 border-b last:border-none border-[#EFF0F6]">
                             <i class="lab lab-line-key lab-font-size-17"></i>
                             <span class="text-sm leading-6 capitalize">{{ $t('button.change_password') }}</span>
+                        </router-link>
+
+                        <router-link :to="{ path: '/admin/support' }"
+                            class="paper-link transition w-full flex items-center gap-3.5 py-3 border-b last:border-none border-[#EFF0F6]">
+                            <i class="lab lab-line-messages-2 lab-font-size-17 text-emerald-600"></i>
+                            <span class="text-sm leading-6 font-semibold text-emerald-700">Support Console</span>
+                        </router-link>
+
+                        <router-link :to="{ path: '/admin/support/governance' }"
+                            class="paper-link transition w-full flex items-center gap-3.5 py-3 border-b last:border-none border-[#EFF0F6]">
+                            <i class="lab lab-line-shield lab-font-size-17 text-indigo-600"></i>
+                            <span class="text-sm leading-6 font-semibold text-indigo-700">AI Governance</span>
                         </router-link>
 
                         <button @click="logout()"
