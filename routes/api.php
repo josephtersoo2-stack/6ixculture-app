@@ -1019,6 +1019,49 @@ Route::prefix('v1/support')->name('v1.support.')->middleware(['installed', 'apiK
         Route::get('/agents', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'agents']);
         Route::post('/presence', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'updatePresence']);
     });
+
+    /*
+    |--------------------------------------------------------------------------
+    | Support Admin Governance Routes (Phase 7)
+    |--------------------------------------------------------------------------
+    */
+    Route::prefix('admin')->name('admin.')->middleware(['auth:sanctum'])->group(function () {
+        // 1. Knowledge Administration
+        Route::prefix('knowledge')->name('knowledge.')->group(function () {
+            Route::get('/', [\App\Http\Controllers\Api\V1\Support\Admin\KnowledgeAdminController::class, 'index']);
+            Route::post('/', [\App\Http\Controllers\Api\V1\Support\Admin\KnowledgeAdminController::class, 'store']);
+            Route::post('/preview', [\App\Http\Controllers\Api\V1\Support\Admin\KnowledgeAdminController::class, 'preview']);
+            Route::get('/{article}', [\App\Http\Controllers\Api\V1\Support\Admin\KnowledgeAdminController::class, 'show']);
+            Route::match(['put', 'patch'], '/{article}', [\App\Http\Controllers\Api\V1\Support\Admin\KnowledgeAdminController::class, 'update']);
+            Route::post('/{article}/versions', [\App\Http\Controllers\Api\V1\Support\Admin\KnowledgeAdminController::class, 'createVersion']);
+            Route::post('/{article}/publish', [\App\Http\Controllers\Api\V1\Support\Admin\KnowledgeAdminController::class, 'publish']);
+            Route::post('/{article}/archive', [\App\Http\Controllers\Api\V1\Support\Admin\KnowledgeAdminController::class, 'archive']);
+            Route::get('/{article}/versions', [\App\Http\Controllers\Api\V1\Support\Admin\KnowledgeAdminController::class, 'versions']);
+            Route::post('/{article}/rollback', [\App\Http\Controllers\Api\V1\Support\Admin\KnowledgeAdminController::class, 'rollback']);
+        });
+
+        // 2. Policy Administration
+        Route::prefix('policies')->name('policies.')->group(function () {
+            Route::get('/', [\App\Http\Controllers\Api\V1\Support\Admin\PolicyAdminController::class, 'index']);
+            Route::post('/', [\App\Http\Controllers\Api\V1\Support\Admin\PolicyAdminController::class, 'store']);
+            Route::post('/simulate', [\App\Http\Controllers\Api\V1\Support\Admin\PolicyAdminController::class, 'simulate']);
+            Route::get('/{policy}', [\App\Http\Controllers\Api\V1\Support\Admin\PolicyAdminController::class, 'show']);
+            Route::match(['put', 'patch'], '/{policy}', [\App\Http\Controllers\Api\V1\Support\Admin\PolicyAdminController::class, 'update']);
+            Route::post('/{policy}/activate', [\App\Http\Controllers\Api\V1\Support\Admin\PolicyAdminController::class, 'activate']);
+            Route::post('/{policy}/disable', [\App\Http\Controllers\Api\V1\Support\Admin\PolicyAdminController::class, 'disable']);
+        });
+
+        // 3. Tool Permission Administration
+        Route::prefix('tools')->name('tools.')->group(function () {
+            Route::get('/', [\App\Http\Controllers\Api\V1\Support\Admin\ToolAdminController::class, 'index']);
+            Route::get('/{tool}', [\App\Http\Controllers\Api\V1\Support\Admin\ToolAdminController::class, 'show']);
+            Route::match(['put', 'patch'], '/{tool}/permissions', [\App\Http\Controllers\Api\V1\Support\Admin\ToolAdminController::class, 'updatePermissions']);
+        });
+
+        // 4. Governance Audit Logs
+        Route::get('/audit-logs', [\App\Http\Controllers\Api\V1\Support\Admin\GovernanceAuditController::class, 'index']);
+    });
 });
+
 
 

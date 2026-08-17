@@ -40,6 +40,15 @@ class ToolRegistry
     }
 
     /**
+     * Get all registered tool instances.
+     * @return array<string, ToolInterface>
+     */
+    public function all(): array
+    {
+        return $this->tools;
+    }
+
+    /**
      * Expose list of all registered and database-active tools with their schemas.
      */
     public function getActiveTools(): array

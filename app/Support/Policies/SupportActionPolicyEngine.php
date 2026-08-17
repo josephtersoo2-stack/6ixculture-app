@@ -26,19 +26,20 @@ class SupportActionPolicyEngine implements PolicyEngineInterface
                 return PolicyEffect::REQUIRE_VERIFICATION;
             }
 
-            // 3. Human escalations / confirm policy check
+            // 3. Human escalations / confirm policy check for critical/sensitive risk levels
             if ($dbTool->requires_human || $dbTool->risk_level === ToolRiskLevel::CRITICAL) {
                 return PolicyEffect::REQUIRE_HUMAN;
-            }
-
-            if ($dbTool->requires_confirmation || $dbTool->risk_level === ToolRiskLevel::SENSITIVE) {
-                return PolicyEffect::CONFIRM;
             }
 
             // 4. Evaluate Custom Policies in DB
             $policies = SupportPolicy::active()->ordered()->get();
             foreach ($policies as $policy) {
                 $config = $policy->configuration ?? [];
+
+                // Dynamic matching for tool_name in policy configuration
+                if (!empty($config['tool_name']) && $config['tool_name'] === $call->name) {
+                    return $policy->effect instanceof PolicyEffect ? $policy->effect : PolicyEffect::tryFrom((string)$policy->effect) ?? PolicyEffect::DENY;
+                }
 
                 // Enforce specific action policies
                 if ($policy->key === 'refund_requires_approval' && $call->name === 'request_refund') {
@@ -48,6 +49,10 @@ class SupportActionPolicyEngine implements PolicyEngineInterface
                 if ($policy->key === 'sensitive_action_confirmation' && in_array($call->name, ['cancel_order', 'change_address'])) {
                     return PolicyEffect::CONFIRM;
                 }
+            }
+
+            if ($dbTool->requires_confirmation || $dbTool->risk_level === ToolRiskLevel::SENSITIVE) {
+                return PolicyEffect::CONFIRM;
             }
 
             return PolicyEffect::ALLOW;
