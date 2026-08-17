@@ -17,6 +17,9 @@ use App\Support\Models\SupportAuditLog;
 use App\Support\Models\SupportConversation;
 use App\Support\Models\SupportMessage;
 use App\Support\Models\SupportVoiceSession;
+use App\Support\Services\Multilingual\LanguageDetectionService;
+use App\Support\Services\Voice\TranscriptNormalizationService;
+use App\Support\Services\Voice\VoiceCapabilityService;
 use App\Support\Services\Voice\VoiceProviderFactory;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -28,15 +31,35 @@ class SupportVoiceController extends Controller
     protected AiOrchestratorInterface $orchestrator;
     protected SpeechToTextInterface $stt;
     protected TextToSpeechInterface $tts;
+    protected LanguageDetectionService $langDetector;
+    protected TranscriptNormalizationService $transcriptNormalizer;
+    protected VoiceCapabilityService $capabilityService;
 
     public function __construct(
         AiOrchestratorInterface $orchestrator,
         ?SpeechToTextInterface $stt = null,
-        ?TextToSpeechInterface $tts = null
+        ?TextToSpeechInterface $tts = null,
+        ?LanguageDetectionService $langDetector = null,
+        ?TranscriptNormalizationService $transcriptNormalizer = null,
+        ?VoiceCapabilityService $capabilityService = null
     ) {
         $this->orchestrator = $orchestrator;
-        $this->stt = $stt ?? VoiceProviderFactory::makeStt();
-        $this->tts = $tts ?? VoiceProviderFactory::makeTts();
+        $this->stt = $stt ?? (app()->bound(SpeechToTextInterface::class) ? app(SpeechToTextInterface::class) : VoiceProviderFactory::makeStt());
+        $this->tts = $tts ?? (app()->bound(TextToSpeechInterface::class) ? app(TextToSpeechInterface::class) : VoiceProviderFactory::makeTts());
+        $this->langDetector = $langDetector ?? new LanguageDetectionService();
+        $this->transcriptNormalizer = $transcriptNormalizer ?? new TranscriptNormalizationService();
+        $this->capabilityService = $capabilityService ?? new VoiceCapabilityService();
+    }
+
+    /**
+     * Get safe reporting object of current voice & multilingual capabilities.
+     */
+    public function capabilities(Request $request): JsonResponse
+    {
+        return response()->json([
+            'data' => $this->capabilityService->getCapabilities(),
+            'message' => 'Voice capabilities retrieved successfully.',
+        ], 200);
     }
 
     /**
@@ -66,6 +89,8 @@ class SupportVoiceController extends Controller
             'metadata' => [
                 'ip' => $request->ip(),
                 'user_agent' => $request->userAgent(),
+                'voice' => $request->input('voice', 'nova'),
+                'speaking_rate' => (float)$request->input('speaking_rate', 1.0),
             ],
         ]);
 
@@ -134,6 +159,95 @@ class SupportVoiceController extends Controller
     }
 
     /**
+     * Reconcile / recover active voice session across browser reloads or temporary drops.
+     */
+    public function recoverSession(Request $request, string $conversation): JsonResponse
+    {
+        $conv = SupportConversation::where('public_id', $conversation)->first();
+        if (!$conv) {
+            return $this->errorNotFound();
+        }
+
+        $user = $this->resolveUser($request);
+        if (!$this->authorizeConversationAccess($request, $user, $conv)) {
+            return $this->errorForbidden();
+        }
+
+        $activeSession = SupportVoiceSession::where('conversation_id', $conv->id)
+            ->where('status', VoiceSessionStatus::ACTIVE)
+            ->latest('id')
+            ->first();
+
+        if (!$activeSession) {
+            // Auto-recreate active session seamlessly
+            $activeSession = SupportVoiceSession::create([
+                'conversation_id' => $conv->id,
+                'customer_id' => $conv->customer_id,
+                'language' => $conv->language ?: 'en',
+                'status' => VoiceSessionStatus::ACTIVE,
+                'started_at' => now(),
+                'provider' => 'whisper_tts',
+                'metadata' => [
+                    'recovered' => true,
+                    'ip' => $request->ip(),
+                ],
+            ]);
+        }
+
+        return response()->json([
+            'data' => [
+                'session_id' => $activeSession->public_id,
+                'status' => $activeSession->status->value,
+                'language' => $activeSession->language,
+                'started_at' => $activeSession->started_at?->toIso8601String(),
+                'conversation_id' => $conv->public_id,
+            ],
+            'message' => 'Voice session recovered.',
+        ], 200);
+    }
+
+    /**
+     * Update customer voice preferences (voice selection, speaking rate).
+     */
+    public function updatePreferences(Request $request, string $conversation): JsonResponse
+    {
+        $conv = SupportConversation::where('public_id', $conversation)->first();
+        if (!$conv) {
+            return $this->errorNotFound();
+        }
+
+        $user = $this->resolveUser($request);
+        if (!$this->authorizeConversationAccess($request, $user, $conv)) {
+            return $this->errorForbidden();
+        }
+
+        $validated = $request->validate([
+            'voice' => ['nullable', 'string', 'in:alloy,echo,fable,onyx,nova,shimmer'],
+            'speaking_rate' => ['nullable', 'numeric', 'min:0.75', 'max:1.5'],
+            'language' => ['nullable', 'string', 'in:en,yo,ig,ha'],
+        ]);
+
+        $meta = is_array($conv->metadata) ? $conv->metadata : [];
+        if (!empty($validated['voice'])) $meta['preferred_voice'] = $validated['voice'];
+        if (!empty($validated['speaking_rate'])) $meta['preferred_speaking_rate'] = (float)$validated['speaking_rate'];
+        
+        $conv->metadata = $meta;
+        if (!empty($validated['language'])) {
+            $conv->language = $validated['language'];
+        }
+        $conv->save();
+
+        return response()->json([
+            'data' => [
+                'voice' => $meta['preferred_voice'] ?? 'nova',
+                'speaking_rate' => $meta['preferred_speaking_rate'] ?? 1.0,
+                'language' => $conv->language,
+            ],
+            'message' => 'Voice preferences updated successfully.',
+        ], 200);
+    }
+
+    /**
      * End an active voice session.
      */
     public function endSession(Request $request, string $conversation, string $session): JsonResponse
@@ -196,14 +310,14 @@ class SupportVoiceController extends Controller
             return $this->errorForbidden();
         }
 
-        $language = $request->input('language', $conv->language ?: 'en');
-        $transcript = $request->input('transcript');
-        $detectedLanguage = $language;
+        $requestedLang = $request->input('language', $conv->language ?: 'en');
+        $rawTranscript = $request->input('transcript');
+        $sttConfidence = 1.0;
 
         // 1. Audio Speech-To-Text Transcribe (if audio uploaded)
         if ($request->hasFile('audio') || $request->filled('audio_base64')) {
             $audioInput = $request->file('audio') ?: $request->input('audio_base64');
-            $sttResult = $this->stt->transcribe($audioInput, $language);
+            $sttResult = $this->stt->transcribe($audioInput, $requestedLang);
 
             if (!empty($sttResult['error'])) {
                 return response()->json([
@@ -214,12 +328,12 @@ class SupportVoiceController extends Controller
                 ], 422);
             }
 
-            $transcript = $sttResult['transcript'];
-            $detectedLanguage = $sttResult['detected_language'] ?? $language;
+            $rawTranscript = $sttResult['transcript'] ?? '';
+            $sttConfidence = (float)($sttResult['confidence'] ?? 1.0);
         }
 
-        $transcript = trim((string)$transcript);
-        if (empty($transcript)) {
+        $rawTranscript = trim((string)$rawTranscript);
+        if (empty($rawTranscript)) {
             return response()->json([
                 'error' => [
                     'code' => 'EMPTY_VOICE_TRANSCRIPT',
@@ -228,16 +342,50 @@ class SupportVoiceController extends Controller
             ], 422);
         }
 
-        // 2. Canonical Turn Execution via SupportOrchestrator
+        // 2. Transcript Normalization & Disfluency Removal
+        $normalization = $this->transcriptNormalizer->normalize($rawTranscript);
+        $normalizedText = $normalization['normalized_transcript'];
+
+        // 3. Language & Code-Switching Detection
+        $detection = $this->langDetector->detect($normalizedText, $requestedLang);
+        $effectiveLanguage = $this->langDetector->resolveEffectiveLanguage(
+            $conv->language,
+            null,
+            $requestedLang,
+            $detection
+        );
+
+        // 4. Low-Confidence handling: If transcript is too uncertain, clarify without executing risky action
+        if ($sttConfidence < 0.5 || $detection['is_low_confidence']) {
+            return response()->json([
+                'data' => [
+                    'user_transcript' => $normalizedText,
+                    'raw_transcript' => $rawTranscript,
+                    'detected_language' => $effectiveLanguage,
+                    'confidence' => $detection['confidence'],
+                    'needs_clarification' => true,
+                    'assistant_message' => [
+                        'content' => 'I did not catch that clearly. Could you please repeat your request?',
+                        'message_type' => 'text',
+                    ],
+                ],
+                'message' => 'Voice transcript low confidence; clarification requested.',
+            ], 200);
+        }
+
+        // 5. Canonical Turn Execution via SupportOrchestrator
         $inboundDTO = new ChatMessageDTO(
             senderType: SenderType::CUSTOMER,
             messageType: MessageType::VOICE_TRANSCRIPT,
-            content: $transcript,
+            content: $normalizedText,
             isInternal: false,
-            language: $detectedLanguage,
+            language: $effectiveLanguage,
             metadata: [
                 'channel' => 'voice',
                 'session_id' => $request->input('session_id'),
+                'raw_transcript' => $rawTranscript,
+                'confidence' => $detection['confidence'],
+                'is_code_switching' => $detection['is_code_switching'],
             ]
         );
 
@@ -252,23 +400,27 @@ class SupportVoiceController extends Controller
         $aiResponseDTO = $this->orchestrator->handle($conv, $inboundDTO);
         $assistantText = $aiResponseDTO->content ?? '';
 
-        // 3. Synthesize Assistant Voice Audio via Text-To-Speech
-        $ttsResult = $this->tts->synthesize($assistantText, $detectedLanguage);
+        // 6. Synthesize Assistant Voice Audio via Text-To-Speech
+        $ttsResult = $this->tts->synthesize($assistantText, $effectiveLanguage);
 
-        // 4. Dispatch Realtime Event
+        // 7. Dispatch Realtime Event
         $latestMessage = $conv->messages()->latest('id')->first();
         if ($latestMessage) {
             try {
                 broadcast(new SupportMessageCreated($latestMessage));
             } catch (\Throwable $e) {
-                // Realtime broadcast is an acceleration layer; don't fail turn if broker is down
+                // Realtime broadcast is an acceleration layer
             }
         }
 
         return response()->json([
             'data' => [
-                'user_transcript' => $transcript,
-                'detected_language' => $detectedLanguage,
+                'user_transcript' => $normalizedText,
+                'raw_transcript' => $rawTranscript,
+                'detected_language' => $detection['detected_language'],
+                'effective_language' => $effectiveLanguage,
+                'confidence' => $detection['confidence'],
+                'is_code_switching' => $detection['is_code_switching'],
                 'assistant_message' => [
                     'id' => $latestMessage?->id,
                     'content' => $assistantText,

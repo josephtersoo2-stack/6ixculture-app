@@ -974,9 +974,12 @@ Route::prefix('frontend')->name('frontend.')->middleware(['installed', 'apiKey',
 |--------------------------------------------------------------------------
 */
 Route::prefix('v1/support')->name('v1.support.')->middleware(['installed', 'apiKey', 'localization'])->group(function () {
+    Route::get('/voice/capabilities', [\App\Http\Controllers\Api\V1\Support\Voice\SupportVoiceController::class, 'capabilities']);
     Route::post('/conversations', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'store']);
     Route::get('/conversations', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'index']);
     Route::get('/conversations/{conversation}', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'show']);
+    Route::get('/conversations/{conversation}/language', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'getLanguage']);
+    Route::post('/conversations/{conversation}/language', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'updateLanguage']);
     Route::post('/conversations/{conversation}/messages', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'sendMessage']);
     Route::get('/conversations/{conversation}/messages', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'getMessages']);
     Route::get('/conversations/{conversation}/updates', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'getUpdates']);
@@ -986,7 +989,7 @@ Route::prefix('v1/support')->name('v1.support.')->middleware(['installed', 'apiK
 
     /*
     |--------------------------------------------------------------------------
-    | Voice Interface Routes (Phase 6)
+    | Voice Interface Routes (Phase 6 & 8)
     |--------------------------------------------------------------------------
     */
     Route::prefix('conversations/{conversation}/voice')->name('voice.')->group(function () {
@@ -995,11 +998,13 @@ Route::prefix('v1/support')->name('v1.support.')->middleware(['installed', 'apiK
         Route::post('/sessions/{session}/end', [\App\Http\Controllers\Api\V1\Support\Voice\SupportVoiceController::class, 'endSession']);
         Route::post('/process', [\App\Http\Controllers\Api\V1\Support\Voice\SupportVoiceController::class, 'process']);
         Route::post('/interrupt', [\App\Http\Controllers\Api\V1\Support\Voice\SupportVoiceController::class, 'interrupt']);
+        Route::post('/preferences', [\App\Http\Controllers\Api\V1\Support\Voice\SupportVoiceController::class, 'updatePreferences']);
+        Route::post('/recover', [\App\Http\Controllers\Api\V1\Support\Voice\SupportVoiceController::class, 'recoverSession']);
     });
 
     /*
     |--------------------------------------------------------------------------
-    | Agent Human Support Workspace Routes (Phase 5 & 6)
+    | Agent Human Support Workspace Routes (Phase 5, 6 & 8)
     |--------------------------------------------------------------------------
     */
     Route::prefix('agent')->name('agent.')->middleware(['auth:sanctum'])->group(function () {
@@ -1008,6 +1013,7 @@ Route::prefix('v1/support')->name('v1.support.')->middleware(['installed', 'apiK
         Route::post('/conversations/{conversation}/assign', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'assign']);
         Route::post('/conversations/{conversation}/reply', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'reply']);
         Route::post('/conversations/{conversation}/notes', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'storeNote']);
+        Route::post('/conversations/{conversation}/translate', [\App\Http\Controllers\Api\V1\Support\Agent\AgentTranslationController::class, 'translate']);
         Route::patch('/conversations/{conversation}/status', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'updateStatus']);
         Route::patch('/conversations/{conversation}/priority', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'updatePriority']);
         Route::patch('/conversations/{conversation}/department', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'updateDepartment']);

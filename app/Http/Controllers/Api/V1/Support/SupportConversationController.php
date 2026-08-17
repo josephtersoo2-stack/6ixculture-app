@@ -469,6 +469,60 @@ class SupportConversationController extends Controller
     }
 
     /**
+     * Get active language and preference for the conversation.
+     */
+    public function getLanguage(Request $request, string $conversation): JsonResponse
+    {
+        $conv = $this->findAndAuthorize($request, $conversation);
+
+        if (!$conv) {
+            return $this->errorNotFound();
+        }
+
+        return response()->json([
+            'data' => [
+                'language' => $conv->language ?: 'en',
+                'conversation_id' => $conv->public_id,
+                'supported_languages' => ['en', 'yo', 'ig', 'ha'],
+            ],
+            'message' => 'Language retrieved successfully.',
+        ], 200);
+    }
+
+    /**
+     * Update/switch conversation language during active session without losing context.
+     */
+    public function updateLanguage(Request $request, string $conversation): JsonResponse
+    {
+        $conv = $this->findAndAuthorize($request, $conversation);
+
+        if (!$conv) {
+            return $this->errorNotFound();
+        }
+
+        $validated = $request->validate([
+            'language' => ['required', 'string', 'in:en,yo,ig,ha'],
+        ]);
+
+        $conv->update(['language' => $validated['language']]);
+
+        // If authenticated user, optionally persist preference in user metadata
+        $user = $request->user('sanctum') ?? Auth::guard('sanctum')->user() ?? Auth::user();
+        if ($user) {
+            // Persist language on session
+            session(['customer_support_language' => $validated['language']]);
+        }
+
+        return response()->json([
+            'data' => [
+                'language' => $conv->language,
+                'conversation_id' => $conv->public_id,
+            ],
+            'message' => 'Conversation language updated successfully.',
+        ], 200);
+    }
+
+    /**
      * Resolve authenticated customer ID or guest token.
      */
     protected function resolveIdentity(Request $request): array
