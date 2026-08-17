@@ -73,6 +73,7 @@ class KnowledgeAdminController extends Controller
 
     /**
      * Create a new draft knowledge base article.
+     * Invariant: New articles must always be created in draft state.
      */
     public function store(Request $request): JsonResponse
     {
@@ -81,13 +82,23 @@ class KnowledgeAdminController extends Controller
             return $this->errorForbidden();
         }
 
+        // Issue E: Reject attempt to create directly as published
+        if ($request->input('status') === 'published') {
+            return response()->json([
+                'error' => [
+                    'code' => 'INVALID_LIFECYCLE_STATE',
+                    'message' => 'New knowledge articles must be created as drafts. Use the explicit publish endpoint to publish.',
+                ]
+            ], 422);
+        }
+
         $validated = $request->validate([
             'title' => 'required|string|max:255',
             'slug' => 'nullable|string|max:255',
             'category' => 'required|string|max:50',
             'language' => 'required|string|in:en,yo,ig,ha',
             'content' => 'required|string',
-            'status' => 'nullable|string|in:draft,published',
+            'status' => 'nullable|string|in:draft',
             'metadata' => 'nullable|array',
         ]);
 
@@ -105,18 +116,16 @@ class KnowledgeAdminController extends Controller
             ], 422);
         }
 
-        $status = $validated['status'] ?? 'draft';
-
-        return DB::transaction(function () use ($validated, $slug, $language, $status, $user) {
+        return DB::transaction(function () use ($validated, $slug, $language, $user) {
             $article = SupportKnowledgeArticle::create([
                 'title' => $validated['title'],
                 'slug' => $slug,
                 'category' => $validated['category'],
                 'language' => $language,
                 'content' => $validated['content'],
-                'status' => $status,
+                'status' => 'draft',
                 'version' => 1,
-                'published_at' => ($status === 'published') ? now() : null,
+                'published_at' => null,
                 'created_by' => $user->id,
                 'updated_by' => $user->id,
                 'metadata' => $validated['metadata'] ?? null,
@@ -143,14 +152,14 @@ class KnowledgeAdminController extends Controller
                     'slug' => $article->slug,
                     'category' => $article->category,
                     'language' => $article->language,
-                    'status' => $article->status,
-                    'version' => $article->version,
+                    'status' => 'draft',
+                    'version' => 1,
                 ],
             ]);
 
             return response()->json([
                 'data' => $article->load(['creator:id,name,email', 'editor:id,name,email', 'versions']),
-                'message' => 'Knowledge article created successfully.',
+                'message' => 'Knowledge article created in draft state.',
             ], 201);
         });
     }
@@ -179,12 +188,24 @@ class KnowledgeAdminController extends Controller
 
     /**
      * Update knowledge article content and attributes.
+     * Invariant: Direct status mutations are prohibited; status transitions must use explicit endpoints.
+     * Editing published content creates a draft version without disrupting active live runtime grounding.
      */
     public function update(Request $request, $id): JsonResponse
     {
         $user = $this->authorizeGovernance($request);
         if (!$user) {
             return $this->errorForbidden();
+        }
+
+        // Issue E: Direct status mutation via update endpoint is strictly prohibited
+        if ($request->has('status')) {
+            return response()->json([
+                'error' => [
+                    'code' => 'STATUS_IMMUTABLE_ON_UPDATE',
+                    'message' => 'Article status cannot be modified directly via update. Use explicit publish, archive, or rollback endpoints.',
+                ]
+            ], 422);
         }
 
         $article = SupportKnowledgeArticle::find($id);
@@ -200,7 +221,6 @@ class KnowledgeAdminController extends Controller
             'category' => 'sometimes|required|string|max:50',
             'language' => 'sometimes|required|string|in:en,yo,ig,ha',
             'content' => 'sometimes|required|string',
-            'status' => 'sometimes|required|string|in:draft,published,archived',
             'metadata' => 'nullable|array',
         ]);
 
@@ -234,8 +254,63 @@ class KnowledgeAdminController extends Controller
             $contentChanged = (isset($validated['content']) && $validated['content'] !== $article->content) ||
                               (isset($validated['title']) && $validated['title'] !== $article->title);
 
+            // If article is currently published and content was edited:
+            if ($article->status === 'published' && $contentChanged) {
+                $newDraftVersion = $article->version + 1;
+                $newTitle = $validated['title'] ?? $article->title;
+                $newContent = $validated['content'] ?? $article->content;
+
+                // Create new draft version record
+                SupportKnowledgeArticleVersion::create([
+                    'article_id' => $article->id,
+                    'version' => $newDraftVersion,
+                    'title' => $newTitle,
+                    'content' => $newContent,
+                    'created_by' => $user->id,
+                ]);
+
+                // Store pending draft in metadata while preserving live published content on main record
+                $meta = $article->metadata ?? [];
+                $meta['pending_draft'] = [
+                    'version' => $newDraftVersion,
+                    'title' => $newTitle,
+                    'content' => $newContent,
+                    'updated_by' => $user->id,
+                    'updated_at' => now()->toIso8601String(),
+                ];
+
+                $article->update([
+                    'slug' => $newSlug,
+                    'category' => $validated['category'] ?? $article->category,
+                    'language' => $newLang,
+                    'updated_by' => $user->id,
+                    'metadata' => $meta,
+                ]);
+
+                SupportAuditLog::log([
+                    'actor_type' => 'admin',
+                    'actor_id' => $user->id,
+                    'action' => 'KNOWLEDGE_ARTICLE_DRAFT_VERSION_CREATED',
+                    'resource_type' => 'support_knowledge_article',
+                    'resource_id' => (string)$article->id,
+                    'authorization_result' => 'ALLOWED',
+                    'before_data' => $beforeData,
+                    'after_data' => [
+                        'draft_version' => $newDraftVersion,
+                        'published_version' => $article->version,
+                        'status' => 'published',
+                    ],
+                ]);
+
+                return response()->json([
+                    'data' => $article->fresh(['creator:id,name,email', 'editor:id,name,email', 'versions']),
+                    'message' => "New draft version v{$newDraftVersion} created. Active published content remains live until explicitly published.",
+                ], 200);
+            }
+
+            // If article is draft or no content changed:
             $newVersion = $article->version;
-            if ($contentChanged) {
+            if ($contentChanged && $article->status === 'draft') {
                 $newVersion = $article->version + 1;
             }
 
@@ -245,13 +320,12 @@ class KnowledgeAdminController extends Controller
                 'category' => $validated['category'] ?? $article->category,
                 'language' => $newLang,
                 'content' => $validated['content'] ?? $article->content,
-                'status' => $validated['status'] ?? $article->status,
                 'version' => $newVersion,
                 'updated_by' => $user->id,
                 'metadata' => $validated['metadata'] ?? $article->metadata,
             ]);
 
-            if ($contentChanged) {
+            if ($contentChanged && $article->status === 'draft') {
                 SupportKnowledgeArticleVersion::create([
                     'article_id' => $article->id,
                     'version' => $newVersion,
@@ -301,11 +375,29 @@ class KnowledgeAdminController extends Controller
         }
 
         $beforeStatus = $article->status;
-        $article->update([
-            'status' => 'published',
-            'published_at' => now(),
-            'updated_by' => $user->id,
-        ]);
+
+        // If there is a pending draft, promote it to active published content
+        if (!empty($article->metadata['pending_draft'])) {
+            $draft = $article->metadata['pending_draft'];
+            $meta = $article->metadata;
+            unset($meta['pending_draft']);
+
+            $article->update([
+                'title' => $draft['title'],
+                'content' => $draft['content'],
+                'version' => $draft['version'],
+                'status' => 'published',
+                'published_at' => now(),
+                'metadata' => $meta,
+                'updated_by' => $user->id,
+            ]);
+        } else {
+            $article->update([
+                'status' => 'published',
+                'published_at' => now(),
+                'updated_by' => $user->id,
+            ]);
+        }
 
         // Ensure current version record exists
         $versionExists = SupportKnowledgeArticleVersion::where('article_id', $article->id)
@@ -448,10 +540,15 @@ class KnowledgeAdminController extends Controller
             $sourceVersion = $article->version;
             $newVersion = $article->version + 1;
 
+            // Clear any pending draft and set live content to target version
+            $meta = $article->metadata ?? [];
+            unset($meta['pending_draft']);
+
             $article->update([
                 'title' => $targetVersion->title,
                 'content' => $targetVersion->content,
                 'version' => $newVersion,
+                'metadata' => $meta,
                 'updated_by' => $user->id,
             ]);
 

@@ -6,8 +6,14 @@
                 <div class="flex items-center gap-2">
                     <span class="w-2.5 h-2.5 rounded-full bg-slate-900"></span>
                     <h3 class="text-sm font-bold text-slate-900">
-                        {{ isEdit ? `Edit Article (v${form.version})` : 'Create Knowledge Article' }}
+                        {{ isEdit ? `Edit Article (v${form.version})` : 'Create Knowledge Article Draft' }}
                     </h3>
+                    <span v-if="article?.status === 'published'" class="px-2 py-0.5 bg-emerald-100 text-emerald-800 text-[10px] font-bold rounded-md">
+                        Published Live
+                    </span>
+                    <span v-else class="px-2 py-0.5 bg-amber-100 text-amber-800 text-[10px] font-bold rounded-md">
+                        Draft
+                    </span>
                 </div>
                 <button @click="$emit('close')" class="text-slate-400 hover:text-slate-600 text-base">
                     &times;
@@ -16,6 +22,11 @@
 
             <!-- Modal Form Body -->
             <div class="p-6 overflow-y-auto flex-1 space-y-4">
+                <!-- Info notice if editing published article -->
+                <div v-if="isEdit && article?.status === 'published'" class="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-800">
+                    <strong>Published Article Versioning:</strong> Editing content will create a new draft version. Live runtime grounding remains on current published version until explicitly published.
+                </div>
+
                 <!-- Title & Slug -->
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
@@ -65,21 +76,6 @@
                     </div>
                 </div>
 
-                <!-- Status Select -->
-                <div>
-                    <label class="block text-xs font-bold text-slate-700 mb-1">Publication State</label>
-                    <div class="flex items-center gap-4">
-                        <label class="flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer">
-                            <input type="radio" value="draft" v-model="form.status" class="accent-slate-900" />
-                            <span>Draft (Private / Non-grounding)</span>
-                        </label>
-                        <label class="flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer">
-                            <input type="radio" value="published" v-model="form.status" class="accent-slate-900" />
-                            <span>Published (Live AI Grounding)</span>
-                        </label>
-                    </div>
-                </div>
-
                 <!-- Content Markdown/Text Area -->
                 <div>
                     <div class="flex items-center justify-between mb-1">
@@ -116,24 +112,37 @@
             </div>
 
             <!-- Modal Footer -->
-            <div class="px-6 py-4 border-t border-slate-100 flex items-center justify-end gap-2 bg-slate-50">
-                <button
-                    type="button"
-                    @click="$emit('close')"
-                    class="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 rounded-xl text-xs font-bold transition-all"
-                >
-                    Cancel
-                </button>
+            <div class="px-6 py-4 border-t border-slate-100 flex items-center justify-between gap-2 bg-slate-50">
+                <div>
+                    <button
+                        v-if="isEdit && article?.status !== 'published'"
+                        type="button"
+                        @click="handlePublishDirectly"
+                        class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs"
+                    >
+                        Publish Now
+                    </button>
+                </div>
 
-                <button
-                    type="button"
-                    @click="handleSave"
-                    :disabled="isSaving || !canSave"
-                    class="px-5 py-2 bg-slate-950 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition-all shadow-xs disabled:opacity-50 flex items-center gap-1.5"
-                >
-                    <span v-if="isSaving" class="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                    <span>{{ isEdit ? 'Update Article' : 'Save Article' }}</span>
-                </button>
+                <div class="flex items-center gap-2">
+                    <button
+                        type="button"
+                        @click="$emit('close')"
+                        class="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 rounded-xl text-xs font-bold transition-all"
+                    >
+                        Cancel
+                    </button>
+
+                    <button
+                        type="button"
+                        @click="handleSave"
+                        :disabled="isSaving || !canSave"
+                        class="px-5 py-2 bg-slate-950 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition-all shadow-xs disabled:opacity-50 flex items-center gap-1.5"
+                    >
+                        <span v-if="isSaving" class="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                        <span>{{ isEdit ? 'Save Draft Version' : 'Save Draft' }}</span>
+                    </button>
+                </div>
             </div>
         </div>
     </div>
@@ -158,7 +167,6 @@ export default {
                 category: this.article?.category || 'Returns',
                 language: this.article?.language || 'en',
                 content: this.article?.content || '',
-                status: this.article?.status || 'draft',
                 version: this.article?.version || 1,
             },
             previewData: null,
@@ -193,13 +201,33 @@ export default {
         },
         handleSave() {
             if (!this.canSave) return;
-            this.$store.dispatch('adminGovernance/saveKnowledgeArticle', this.form)
+            const payload = {
+                id: this.form.id,
+                title: this.form.title,
+                slug: this.form.slug,
+                category: this.form.category,
+                language: this.form.language,
+                content: this.form.content,
+            };
+
+            this.$store.dispatch('adminGovernance/saveKnowledgeArticle', payload)
                 .then(() => {
                     this.$emit('saved');
                     this.$emit('close');
                 })
                 .catch((err) => {
                     alert(err?.response?.data?.error?.message || 'Failed to save knowledge article.');
+                });
+        },
+        handlePublishDirectly() {
+            if (!this.form.id) return;
+            this.$store.dispatch('adminGovernance/publishKnowledgeArticle', this.form.id)
+                .then(() => {
+                    this.$emit('saved');
+                    this.$emit('close');
+                })
+                .catch((err) => {
+                    alert(err?.response?.data?.error?.message || 'Failed to publish article.');
                 });
         },
     },

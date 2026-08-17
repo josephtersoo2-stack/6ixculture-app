@@ -26,8 +26,8 @@ class SupportActionPolicyEngine implements PolicyEngineInterface
                 return PolicyEffect::REQUIRE_VERIFICATION;
             }
 
-            // 3. Human escalations / confirm policy check for critical/sensitive risk levels
-            if ($dbTool->requires_human || $dbTool->risk_level === ToolRiskLevel::CRITICAL) {
+            // 3. Centralized Immutable Critical-Action Safeguard Check
+            if (CriticalActionSafetyPolicy::isCriticalAction($call->name) || $dbTool->requires_human || $dbTool->risk_level === ToolRiskLevel::CRITICAL) {
                 return PolicyEffect::REQUIRE_HUMAN;
             }
 
@@ -38,7 +38,12 @@ class SupportActionPolicyEngine implements PolicyEngineInterface
 
                 // Dynamic matching for tool_name in policy configuration
                 if (!empty($config['tool_name']) && $config['tool_name'] === $call->name) {
-                    return $policy->effect instanceof PolicyEffect ? $policy->effect : PolicyEffect::tryFrom((string)$policy->effect) ?? PolicyEffect::DENY;
+                    $effect = $policy->effect instanceof PolicyEffect ? $policy->effect : PolicyEffect::tryFrom((string)$policy->effect) ?? PolicyEffect::DENY;
+                    // Critical action safeguards cannot be bypassed by a custom ALLOW policy
+                    if ($effect === PolicyEffect::ALLOW && CriticalActionSafetyPolicy::isCriticalAction($call->name)) {
+                        return PolicyEffect::REQUIRE_HUMAN;
+                    }
+                    return $effect;
                 }
 
                 // Enforce specific action policies
@@ -51,7 +56,7 @@ class SupportActionPolicyEngine implements PolicyEngineInterface
                 }
             }
 
-            if ($dbTool->requires_confirmation || $dbTool->risk_level === ToolRiskLevel::SENSITIVE) {
+            if ($dbTool->requires_confirmation || $dbTool->risk_level === ToolRiskLevel::SENSITIVE || CriticalActionSafetyPolicy::isSensitiveAction($call->name)) {
                 return PolicyEffect::CONFIRM;
             }
 

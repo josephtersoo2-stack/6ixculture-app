@@ -14,7 +14,10 @@ use App\Support\Models\SupportAITool;
 use App\Support\Models\SupportAuditLog;
 use App\Support\Models\SupportConversation;
 use App\Support\Models\SupportPolicy;
+use App\Support\Policies\CriticalActionSafetyPolicy;
 use App\Support\Policies\SupportActionPolicyEngine;
+use App\Support\Services\AuditRedactionService;
+use App\Support\Tools\ToolRegistry;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -62,6 +65,7 @@ class PolicyAdminController extends Controller
 
     /**
      * Create a new support policy.
+     * Invariant: New policies always start in inactive/draft state (is_active = false).
      */
     public function store(Request $request): JsonResponse
     {
@@ -77,10 +81,10 @@ class PolicyAdminController extends Controller
             'category' => 'required|string|max:50',
             'effect' => 'required|string|in:allow,deny,confirm,require_verification,require_human',
             'configuration' => 'nullable|array',
-            'is_active' => 'nullable|boolean',
             'priority' => 'nullable|integer',
         ]);
 
+        // Issue B: Always create new policies in inactive/draft state
         $policy = SupportPolicy::create([
             'key' => Str::slug($validated['key'], '_'),
             'name' => $validated['name'],
@@ -88,7 +92,7 @@ class PolicyAdminController extends Controller
             'category' => $validated['category'],
             'effect' => $validated['effect'],
             'configuration' => $validated['configuration'] ?? null,
-            'is_active' => $validated['is_active'] ?? true,
+            'is_active' => false, // Invariant: starts inactive
             'priority' => $validated['priority'] ?? 0,
             'created_by' => $user->id,
             'updated_by' => $user->id,
@@ -105,14 +109,14 @@ class PolicyAdminController extends Controller
                 'key' => $policy->key,
                 'name' => $policy->name,
                 'effect' => $policy->effect?->value ?? $policy->effect,
-                'is_active' => $policy->is_active,
+                'is_active' => false,
                 'priority' => $policy->priority,
             ],
         ]);
 
         return response()->json([
             'data' => $policy->fresh(['creator:id,name,email', 'editor:id,name,email']),
-            'message' => 'Policy created successfully.',
+            'message' => 'Policy created in draft/inactive state. Use explicit activation endpoint to activate.',
         ], 201);
     }
 
@@ -155,9 +159,23 @@ class PolicyAdminController extends Controller
             'category' => 'sometimes|required|string|max:50',
             'effect' => 'sometimes|required|string|in:allow,deny,confirm,require_verification,require_human',
             'configuration' => 'nullable|array',
-            'is_active' => 'sometimes|boolean',
             'priority' => 'sometimes|integer',
         ]);
+
+        // If policy is active and being updated, re-validate configuration
+        if ($policy->is_active) {
+            $tempPolicy = clone $policy;
+            $tempPolicy->fill($validated);
+            $validationError = $this->validatePolicyActivation($tempPolicy);
+            if ($validationError) {
+                return response()->json([
+                    'error' => [
+                        'code' => 'POLICY_ACTIVATION_INVALID',
+                        'message' => $validationError,
+                    ]
+                ], 422);
+            }
+        }
 
         $beforeData = [
             'name' => $policy->name,
@@ -191,7 +209,7 @@ class PolicyAdminController extends Controller
     }
 
     /**
-     * Activate a policy.
+     * Activate a policy with structural and safety validation.
      */
     public function activate(Request $request, $id): JsonResponse
     {
@@ -203,6 +221,17 @@ class PolicyAdminController extends Controller
         $policy = SupportPolicy::find($id);
         if (!$policy) {
             return response()->json(['error' => ['code' => 'NOT_FOUND', 'message' => 'Policy not found.']], 404);
+        }
+
+        // Issue C: Validate policy integrity and safety before activation
+        $validationError = $this->validatePolicyActivation($policy);
+        if ($validationError) {
+            return response()->json([
+                'error' => [
+                    'code' => 'POLICY_ACTIVATION_INVALID',
+                    'message' => $validationError,
+                ]
+            ], 422);
         }
 
         $policy->update(['is_active' => true, 'updated_by' => $user->id]);
@@ -300,9 +329,12 @@ class PolicyAdminController extends Controller
             $warnings[] = "Tool '{$toolName}' is currently inactive.";
         }
 
-        if ($dbTool && $dbTool->risk_level === ToolRiskLevel::CRITICAL) {
+        if ($dbTool && (CriticalActionSafetyPolicy::isCriticalAction($toolName) || $dbTool->risk_level === ToolRiskLevel::CRITICAL)) {
             $warnings[] = "Tool has CRITICAL risk level and always requires human escalation.";
         }
+
+        // Issue D: Recursively sanitize simulation arguments before storing in audit metadata
+        $sanitizedArgs = AuditRedactionService::sanitize($args);
 
         SupportAuditLog::log([
             'actor_type' => 'admin',
@@ -314,7 +346,7 @@ class PolicyAdminController extends Controller
             'metadata' => [
                 'actor_type' => $actorType,
                 'tool_name' => $toolName,
-                'arguments' => $args,
+                'arguments' => $sanitizedArgs,
                 'effect' => $effect->value,
                 'is_simulation' => true,
             ],
@@ -334,11 +366,49 @@ class PolicyAdminController extends Controller
                 'is_allowed' => ($effect === PolicyEffect::ALLOW),
                 'is_denied' => ($effect === PolicyEffect::DENY),
                 'tool_registered' => (bool)$dbTool,
-                'tool_risk_level' => $dbTool?->risk_level?->value ?? 'unknown',
+                'tool_risk_level' => $dbTool?->risk_level?->value ?? (CriticalActionSafetyPolicy::isCriticalAction($toolName) ? 'critical' : 'unknown'),
                 'warnings' => $warnings,
                 'evaluated_at' => now()->toIso8601String(),
             ]
         ], 200);
+    }
+
+    /**
+     * Validate policy configuration before activation.
+     */
+    protected function validatePolicyActivation(SupportPolicy $policy): ?string
+    {
+        // 1. Basic integrity
+        if (empty($policy->key) || empty($policy->name) || empty($policy->category)) {
+            return 'Policy key, name, and category are required for activation.';
+        }
+
+        $validEffects = ['allow', 'deny', 'confirm', 'require_verification', 'require_human'];
+        $effectStr = $policy->effect instanceof PolicyEffect ? $policy->effect->value : (string)$policy->effect;
+        if (!in_array($effectStr, $validEffects, true)) {
+            return "Invalid policy effect '{$effectStr}'.";
+        }
+
+        // 2. Tool references validation
+        $config = $policy->configuration ?? [];
+        $toolName = $config['tool_name'] ?? $config['action'] ?? null;
+        if (!empty($toolName)) {
+            $toolRegistry = new ToolRegistry();
+            $toolInRegistry = $toolRegistry->get($toolName);
+            $toolInDb = SupportAITool::where('key', $toolName)->exists();
+
+            if (!$toolInRegistry && !$toolInDb) {
+                return "Referenced tool '{$toolName}' does not exist in the registered tool catalog.";
+            }
+        }
+
+        // 3. Centralized Immutable Critical-Action Safeguards Check
+        $safetyError = CriticalActionSafetyPolicy::validatePolicySafety($policy);
+        if ($safetyError) {
+            return $safetyError;
+        }
+
+        return null;
     }
 
     protected function authorizeGovernance(Request $request): ?User

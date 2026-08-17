@@ -2,6 +2,7 @@
 
 namespace App\Support\Models;
 
+use App\Support\Services\AuditRedactionService;
 use Illuminate\Database\Eloquent\Model;
 
 class SupportAuditLog extends Model
@@ -41,11 +42,9 @@ class SupportAuditLog extends Model
      */
     public static function log(array $attributes): self
     {
-        $sensitiveKeys = ['password', 'token', 'secret', 'api_key', 'authorization', 'cookie'];
-
         foreach (['before_data', 'after_data', 'metadata'] as $jsonField) {
-            if (!empty($attributes[$jsonField]) && is_array($attributes[$jsonField])) {
-                $attributes[$jsonField] = self::sanitizePayload($attributes[$jsonField], $sensitiveKeys);
+            if (!empty($attributes[$jsonField])) {
+                $attributes[$jsonField] = AuditRedactionService::sanitize($attributes[$jsonField]);
             }
         }
 
@@ -59,22 +58,5 @@ class SupportAuditLog extends Model
         }
 
         return self::create($attributes);
-    }
-
-    private static function sanitizePayload(array $data, array $sensitiveKeys): array
-    {
-        foreach ($data as $k => $v) {
-            if (is_array($v)) {
-                $data[$k] = self::sanitizePayload($v, $sensitiveKeys);
-            } else {
-                foreach ($sensitiveKeys as $sensitive) {
-                    if (str_contains(strtolower((string)$k), $sensitive)) {
-                        $data[$k] = '[REDACTED]';
-                        break;
-                    }
-                }
-            }
-        }
-        return $data;
     }
 }

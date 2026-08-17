@@ -1,14 +1,24 @@
-# 6ixCulture AI Support — Phase 7: Knowledge & Policy Administration Implementation Report
+# 6ixCulture AI Support — Phase 7: Knowledge & Policy Administration Implementation & Hardening Report
 
 **Repository:** `josephtersoo2-stack/6ixculture-app`  
 **Phase:** Phase 7 — Knowledge & Policy Administration  
-**Status:** COMPLETED & VERIFIED  
+**Status:** FULLY IMPLEMENTED, HARDENED & VERIFIED  
 
 ---
 
 ## 1. Executive Summary
 
-Phase 7 establishes the **Authenticated Support Governance Center** for 6ixCulture Enterprise AI Support. In this architecture, the Human Administrator functions as the **Governance Authority**, while the AI system operates strictly as a **Runtime Consumer**. Administrators can safely curate multilingual knowledge grounding, enforce action policies, govern registered AI tool execution boundaries, run side-effect-free policy simulations, and audit all governance operations without exposing secrets or breaking runtime invariants.
+Phase 7 establishes the **Authenticated Support Governance Center** for 6ixCulture Enterprise AI Support. In this architecture, the Human Administrator functions as the **Governance Authority**, while the AI system operates strictly as a **Runtime Consumer**. Following the targeted governance hardening pass, all administrative entry points enforce strict lifecycle boundaries:
+
+1. **Centralized Immutable Critical-Action Safeguards**: Enforced via `CriticalActionSafetyPolicy` to guarantee that critical financial, account, cancellation, and payment operations can never be downgraded to unrestricted AI execution.
+2. **Inactive-by-Default Policy Lifecycle**: New policies are strictly created in the `inactive/draft` state (`is_active = false`). Activation requires explicit validation and activation through `POST /policies/{id}/activate`.
+3. **Policy Activation Validation**: Policies are validated against registered tool references in `ToolRegistry`/`SupportAITool` and safety compatibility before transition to active state (`422 POLICY_ACTIVATION_INVALID` on failure).
+4. **Simulation Audit Redaction**: Reusable `AuditRedactionService` recursively redacts credentials, tokens, secrets, cookies, cards, and passwords from all audit logs and simulation metadata.
+5. **Enforced Knowledge Draft/Publish Lifecycle & Published Version Protection**:
+   - Direct publication via `POST /knowledge` is rejected with `422 INVALID_LIFECYCLE_STATE`.
+   - Direct status modification on `PUT|PATCH /knowledge/{id}` is rejected with `422 STATUS_IMMUTABLE_ON_UPDATE`.
+   - Editing published articles creates a new draft version snapshot while preserving live runtime grounding on the existing published content until explicit publication.
+   - Rollback remains non-destructive, creating a new current version from historical snapshots.
 
 ---
 
@@ -36,8 +46,9 @@ Phase 7 establishes the **Authenticated Support Governance Center** for 6ixCultu
                     ▼                                         ▼
      ┌─────────────────────────────┐           ┌─────────────────────────────┐
      │  Knowledge Grounding Layer  │           │   Action Policy & Engine    │
-     │  - Published Articles only  │           │   - Dynamic Policies & Risk │
-     │  - Version Snapshots & Logs │           │   - Tool Permission Config  │
+     │  - Published Articles only  │           │   - CriticalActionPolicy    │
+     │  - Draft Version Isolation  │           │   - Dynamic Policies & Risk │
+     │  - Non-Destructive Rollback │           │   - Tool Permission Config  │
      │  - Multilingual Fallback    │           │   - Side-Effect-Free Sim    │
      └──────────────┬──────────────┘           └──────────────┬──────────────┘
                     │                                         │
@@ -50,137 +61,92 @@ Phase 7 establishes the **Authenticated Support Governance Center** for 6ixCultu
                     └─────────────────────────────────────────┘
 ```
 
-### Core Invariants Enforced
-1. **Separation of Authority & Runtime**: Runtime models and customers cannot mutate knowledge or policies. Only authenticated administrators with `Admin` or `Manager` roles can alter governance state.
-2. **Draft / Archive Isolation**: Only articles with `status = published` enter AI grounding. `draft` and `archived` articles are excluded at the Eloquent query layer.
-3. **Inert Knowledge Safety**: Knowledge articles are inert facts; they cannot override action policies, disable authorization, inject executable code, or grant AI tools.
-4. **Non-Destructive Version History**: Historical versions in `support_knowledge_article_versions` are immutable. Rollbacks generate a new current version snapshot.
-5. **Preserved Critical Safeguards**: Critical actions (`request_refund`, sensitive actions) retain mandatory human escalation and confirmation safeguards regardless of UI adjustments.
-6. **Side-Effect-Free Simulation**: The Policy Simulator executes against the policy engine in memory and returns a prominent `SIMULATION ONLY` badge without modifying orders, users, or tickets.
+---
+
+## 3. Hardened Governance Components
+
+### 3.1 Centralized Critical Action Safety Policy (`app/Support/Policies/CriticalActionSafetyPolicy.php`)
+- Centralizes critical operations (`request_refund`, `refund`, `change_payment_method`, `update_payment`, `refund_payment`, `process_payment`, `change_password`, `reset_credentials`, `update_account_email`, `delete_account`) and sensitive operations (`cancel_order`, `change_address`).
+- **`enforceToolSafety()`**: Automatically normalizes tool permissions to enforce `requires_human = true`, `requires_authentication = true`, and `requires_confirmation = true` on critical tools.
+- **`validatePolicySafety()`**: Prevents activating policies that attempt `ALLOW` effects on critical tools without human approval.
+- **`evaluateSafeguard()`**: Directly called by `SupportActionPolicyEngine` to guarantee runtime human escalation and confirmation safeguards.
+
+### 3.2 Audit Redaction Service (`app/Support/Services/AuditRedactionService.php`)
+- Recursively inspects data structures and redacts sensitive keys: `password`, `token`, `access_token`, `refresh_token`, `api_key`, `secret`, `authorization`, `cookie`, `credential`, `payment`, `card`, `cvv`, `pin`.
+- Bounds string lengths (max 500 characters) to prevent unbounded memory/database consumption.
+- Integrated into `SupportAuditLog::log()` and `PolicyAdminController::simulate()`.
+
+### 3.3 Hardened Policy Admin Controller (`app/Http/Controllers/Api/V1/Support/Admin/PolicyAdminController.php`)
+- **`store()`**: Always forces `is_active = false`.
+- **`activate()`**: Validates policy integrity, confirms tool existence in `ToolRegistry`/`SupportAITool`, and applies `CriticalActionSafetyPolicy::validatePolicySafety()`. Returns `422 POLICY_ACTIVATION_INVALID` on failure.
+- **`simulate()`**: Evaluates policy dry-runs without side effects, tags results with `SIMULATION ONLY`, and records sanitized audit records.
+
+### 3.4 Hardened Knowledge Admin Controller (`app/Http/Controllers/Api/V1/Support/Admin/KnowledgeAdminController.php`)
+- **`store()`**: Rejects `status = 'published'` with `422 INVALID_LIFECYCLE_STATE`; forces `status = 'draft'` and `published_at = null`.
+- **`update()`**: Rejects direct `status` mutations with `422 STATUS_IMMUTABLE_ON_UPDATE`. When editing a published article, creates a new draft version snapshot in `support_knowledge_article_versions` while preserving live published content on the active record until explicit publication.
+- **`publish()`**: Promotes pending draft versions to active published content, updates `published_at = now()`, and enables AI runtime grounding.
+- **`archive()`**: Sets `status = 'archived'`, immediately excluding the article from AI grounding.
+- **`rollback()`**: Non-destructively creates a new current version from historical snapshots without deleting or mutating source records.
 
 ---
 
-## 3. Implemented Components
+## 4. Frontend Governance UX (`resources/js/components/admin/support/governance/`)
 
-### 3.1 Backend Admin Governance Controllers (`app/Http/Controllers/Api/V1/Support/Admin/`)
-
-1. **`KnowledgeAdminController`**:
-   - `GET /api/v1/support/admin/knowledge`: Lists articles with filters (`search`, `category`, `language`, `status`).
-   - `POST /api/v1/support/admin/knowledge`: Creates draft article, validates unique `[slug, language]`, snapshots version 1.
-   - `GET /api/v1/support/admin/knowledge/{id}`: Retrieves article details and authoring metadata.
-   - `PUT|PATCH /api/v1/support/admin/knowledge/{id}`: Updates article, auto-increments version, snapshots historical record.
-   - `POST /api/v1/support/admin/knowledge/{id}/publish`: Promotes article to `published` state with `published_at = now()`, immediately entering AI runtime grounding.
-   - `POST /api/v1/support/admin/knowledge/{id}/archive`: Archives article, immediately revoking it from runtime grounding.
-   - `GET /api/v1/support/admin/knowledge/{id}/versions`: Returns immutable historical snapshots.
-   - `POST /api/v1/support/admin/knowledge/{id}/rollback`: Restores historical content by creating a new current version.
-   - `POST /api/v1/support/admin/knowledge/preview`: Computes word counts, character counts, and publication validation before saving.
-
-2. **`PolicyAdminController`**:
-   - `GET /api/v1/support/admin/policies`: Lists configured policies ordered by priority.
-   - `POST /api/v1/support/admin/policies`: Creates dynamic policy (`allow`, `deny`, `confirm`, `require_human`, `require_verification`).
-   - `GET /api/v1/support/admin/policies/{id}`: Retrieves policy configuration.
-   - `PUT|PATCH /api/v1/support/admin/policies/{id}`: Updates policy fields and rules.
-   - `POST /api/v1/support/admin/policies/{id}/activate`: Activates policy.
-   - `POST /api/v1/support/admin/policies/{id}/disable`: Deactivates policy.
-   - `POST /api/v1/support/admin/policies/simulate`: Dry-runs tool calls through `SupportActionPolicyEngine` without database side effects.
-
-3. **`ToolAdminController`**:
-   - `GET /api/v1/support/admin/tools`: Lists backend registered tools alongside DB governance settings.
-   - `GET /api/v1/support/admin/tools/{id}`: Retrieves tool schema and permissions.
-   - `PATCH /api/v1/support/admin/tools/{id}/permissions`: Updates `risk_level`, `requires_authentication`, `requires_confirmation`, `requires_human`, and `is_active` while protecting critical tool invariants.
-
-4. **`GovernanceAuditController`**:
-   - `GET /api/v1/support/admin/audit-logs`: Lists sanitized governance trail with actor ID, action type, resource ID, before/after snapshots, and redaction of credentials/tokens.
+1. **`SupportGovernance.vue`**: Governance center hub with tabs for Knowledge Grounding, Action Policies, Tool Permissions, Policy Simulator, and Governance Audit Logs.
+2. **`KnowledgeManager.vue`** & **`KnowledgeArticleEditor.vue`**: Draft-first article creation, live validation preview, and explicit action buttons (Save Draft, Publish, Archive, History). Direct status radio buttons removed.
+3. **`KnowledgeVersionHistory.vue`**: Displays historical version snapshots with one-click non-destructive rollback.
+4. **`PolicyManager.vue`** & **`PolicyEditor.vue`**: New policies display `INACTIVE / DRAFT` status notices. Activation is triggered via explicit review and activation actions.
+5. **`PolicySimulator.vue`**: Dry-run sandbox displaying `SIMULATION ONLY` badge and policy breakdown.
+6. **`ToolPermissionManager.vue`**: Tool permission catalog showing immutable safety notices on critical actions and disabling downgrade checkboxes in the UI.
+7. **`GovernanceAuditLog.vue`**: Real-time governance event log displaying sanitized metadata.
 
 ---
 
-### 3.2 Frontend Vue 3 Governance Center (`resources/js/components/admin/support/governance/`)
+## 5. Verification & Test Results
 
-1. **`SupportGovernance.vue`**: Main governance hub with responsive navigation tabs (Knowledge Grounding, Action Policies, Tool Permissions, Policy Simulator, Governance Audit Logs).
-2. **`KnowledgeManager.vue`**: Knowledge article grid with search, category filtering, language badges (`en`, `yo`, `ig`, `ha`), status indicators (`published`, `draft`, `archived`), and instant publish/archive actions.
-3. **`KnowledgeArticleEditor.vue`**: Draft/published article editor with live validation preview, category selection, and markdown support.
-4. **`KnowledgeVersionHistory.vue`**: Modal displaying chronological version snapshots with one-click non-destructive rollback.
-5. **`PolicyManager.vue`**: Action policy grid with category filtering, effect tags (`ALLOW`, `DENY`, `CONFIRM`, `REQUIRE_HUMAN`, `REQUIRE_VERIFICATION`), and quick activation toggle.
-6. **`PolicyEditor.vue`**: Policy modal for setting evaluation priority, category, effect, and descriptions.
-7. **`PolicySimulator.vue`**: Interactive dry-run sandbox with prominent `SIMULATION ONLY` badge, evaluating actor type against registered tools.
-8. **`ToolPermissionManager.vue`**: Registered tool catalog governance interface for configuring tool risk levels and human escalation requirements.
-9. **`GovernanceAuditLog.vue`**: Real-time governance event log with actor tracking, action filters, and sanitized metadata.
-10. **`resources/js/store/modules/adminGovernance.js`**: Namespaced Vuex store managing API state, caching, pagination, and error handling.
-11. **`resources/js/router/modules/supportRoutes.js`**: Registered route `/admin/support/governance` with `support_governance` permission checks.
+### 5.1 Hardened Governance Test Suite (`tests/Feature/Support/SupportGovernanceTest.php`)
+- `test_unauthenticated_and_regular_customer_denied_governance_endpoints` (PASS)
+- `test_normal_support_agent_without_governance_powers_is_denied` (PASS)
+- `test_critical_refund_cannot_disable_human_approval` (PASS)
+- `test_critical_and_sensitive_actions_remain_protected` (PASS)
+- `test_new_policy_always_starts_inactive` (PASS)
+- `test_explicit_activation_works` (PASS)
+- `test_invalid_policy_with_nonexistent_tool_cannot_activate` (PASS)
+- `test_unsafe_critical_policy_cannot_activate` (PASS)
+- `test_sensitive_simulation_arguments_are_redacted_in_audit_log` (PASS)
+- `test_new_article_cannot_be_published_through_create` (PASS)
+- `test_explicit_publish_transitions_draft_to_published` (PASS)
+- `test_direct_update_cannot_publish_or_archive_article` (PASS)
+- `test_editing_published_content_creates_draft_version_preserving_live_content` (PASS)
+- `test_rollback_is_non_destructive` (PASS)
+- `test_multilingual_knowledge_fallback_safe_behavior` (PASS)
 
----
-
-## 4. Verification & Testing
-
-### 4.1 Test Suite Breakdown
-A dedicated test suite `tests/Feature/Support/SupportGovernanceTest.php` was created covering all Phase 7 requirements:
-- `test_unauthenticated_and_regular_customer_denied_governance_endpoints`: Verifies `401 Unauthorized` and `403 Forbidden` (`SUPPORT_GOVERNANCE_FORBIDDEN`) for non-governance users.
-- `test_normal_support_agent_without_governance_powers_is_denied`: Ensures regular support agents cannot access governance APIs.
-- `test_admin_can_create_draft_knowledge_article_with_version_1`: Verifies draft creation, slug generation, initial version snapshot, and audit trail logging.
-- `test_draft_articles_are_strictly_excluded_from_ai_grounding`: Asserts draft articles never enter runtime search results.
-- `test_admin_can_publish_and_archive_article_influencing_grounding`: Validates that publishing immediately enables grounding and archiving immediately revokes it.
-- `test_article_versioning_and_non_destructive_rollback`: Verifies incremental versioning and rollback creating new versions without data loss.
-- `test_multilingual_knowledge_fallback_safe_behavior`: Verifies draft translations are excluded, published translations match requested language, and fallback to published English works safely.
-- `test_policy_administration_lifecycle`: Validates policy creation, deactivation, and reactivation.
-- `test_policy_simulation_evaluates_correctly_without_side_effects`: Tests side-effect-free evaluation returning `SIMULATION ONLY` badge and expected `REQUIRE_HUMAN` effect for refund tools.
-- `test_tool_permission_governance_and_critical_safeguard_preservation`: Verifies tool risk configuration and preservation of critical safeguards on `request_refund`.
-- `test_audit_logs_endpoint_returns_sanitized_governance_trail`: Confirms audit log retrieval with sanitized metadata.
-
-### 4.2 Test Execution Results
+### 5.2 Full Test Suite Results
 ```bash
 $ php artisan test --filter=Support
+  Tests:    97 passed (394 assertions)
+  Duration: 33.25s
 
-   PASS  Tests\Feature\Support\AgentSupportWorkspaceTest (11 tests, 41 assertions)
-   PASS  Tests\Feature\Support\RealtimeAuthorizationTest (14 tests, 42 assertions)
-   PASS  Tests\Feature\Support\SupportApiTest (16 tests, 88 assertions)
-   PASS  Tests\Feature\Support\SupportAuthorizationTest (4 tests, 12 assertions)
-   PASS  Tests\Feature\Support\SupportGovernanceTest (11 tests, 65 assertions)
-   PASS  Tests\Feature\Support\SupportKnowledgeGroundingTest (5 tests, 21 assertions)
-   PASS  Tests\Feature\Support\SupportOrchestratorTest (7 tests, 27 assertions)
-   PASS  Tests\Feature\Support\SupportSeederTest (1 test, 14 assertions)
-   PASS  Tests\Feature\Support\SupportVoiceTest (8 tests, 76 assertions)
-
-  Tests:    93 passed (386 assertions)
-  Duration: 28.18s
+$ php artisan test
+  Tests:    99 passed (396 assertions)
+  Duration: 27.26s
 ```
 
-All 21 registered governance routes verified:
-```
-  GET|HEAD        api/v1/support/admin/audit-logs
-  GET|HEAD        api/v1/support/admin/knowledge
-  POST            api/v1/support/admin/knowledge
-  POST            api/v1/support/admin/knowledge/preview
-  GET|HEAD        api/v1/support/admin/knowledge/{article}
-  PUT|PATCH       api/v1/support/admin/knowledge/{article}
-  POST            api/v1/support/admin/knowledge/{article}/archive
-  POST            api/v1/support/admin/knowledge/{article}/publish
-  POST            api/v1/support/admin/knowledge/{article}/rollback
-  POST            api/v1/support/admin/knowledge/{article}/versions
-  GET|HEAD        api/v1/support/admin/knowledge/{article}/versions
-  GET|HEAD        api/v1/support/admin/policies
-  POST            api/v1/support/admin/policies
-  POST            api/v1/support/admin/policies/simulate
-  GET|HEAD        api/v1/support/admin/policies/{policy}
-  PUT|PATCH       api/v1/support/admin/policies/{policy}
-  POST            api/v1/support/admin/policies/{policy}/activate
-  POST            api/v1/support/admin/policies/{policy}/disable
-  GET|HEAD        api/v1/support/admin/tools
-  GET|HEAD        api/v1/support/admin/tools/{tool}
-  PUT|PATCH       api/v1/support/admin/tools/{tool}/permissions
-```
+All 21 registered governance routes verified via `php artisan route:list --path=v1/support/admin`.
 
 ---
 
-## 5. Security & Safety Invariants Summary
+## 6. Summary of Security & Governance Invariants
 
 | Domain | Invariant | Enforcement Mechanism |
 |---|---|---|
-| **Knowledge Grounding** | Draft/Archived Exclusion | Eloquent scope `SupportKnowledgeArticle::published()` |
-| **Knowledge Grounding** | Multilingual Grounding | Language match $\rightarrow$ Fallback to published English |
-| **Knowledge Safety** | Inert Material | Treated as inert context strings, never executed |
-| **Version History** | Non-Destructive Rollback | New version record created; historical snapshots immutable |
-| **Policy Engine** | Critical Action Protection | `request_refund` and `CRITICAL` risk tools mandate `REQUIRE_HUMAN` |
-| **Policy Simulator** | Side-Effect-Free Dry Run | Evaluated in-memory; UI tagged with `SIMULATION ONLY` badge |
-| **Tool Permissions** | Catalog Boundary | Strictly governs registered backend classes from `ToolRegistry` |
-| **Governance Access** | Elevated Authorization | Restricted to `Admin` & `Manager` roles; rejects agents & customers |
-| **Audit Logs** | Secret Sanitization | Redaction of tokens, passwords, and authorization keys |
+| **Critical Actions** | Immutable Human Escalation | `CriticalActionSafetyPolicy` & `SupportActionPolicyEngine` |
+| **Sensitive Actions** | Mandatory Customer Confirmation | `CriticalActionSafetyPolicy` & `PolicyEffect::CONFIRM` |
+| **Policy Creation** | Inactive by Default | `PolicyAdminController::store()` forces `is_active = false` |
+| **Policy Activation** | Safety & Tool Integrity Check | `PolicyAdminController::activate()` validates before enabling |
+| **Audit Redaction** | Credential Sanitization | `AuditRedactionService::sanitize()` recursive redaction |
+| **Knowledge Lifecycle** | Draft-First Creation | `KnowledgeAdminController::store()` rejects direct publish |
+| **Knowledge Lifecycle** | Immutable Status on Update | `KnowledgeAdminController::update()` rejects status mutation |
+| **Live Knowledge Protection** | Draft Versioning on Edit | Updates to published articles create draft versions without altering live content |
+| **Version History** | Non-Destructive Rollback | Restorations create new version snapshots; history is immutable |
+| **Governance Scope** | Administrative Authority Only | Restricted to `Admin` & `Manager` roles (`SUPPORT_GOVERNANCE_FORBIDDEN`) |

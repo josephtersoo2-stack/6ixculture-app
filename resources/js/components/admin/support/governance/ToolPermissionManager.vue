@@ -96,11 +96,16 @@
                 </div>
 
                 <div class="p-6 space-y-4">
+                    <div v-if="isCriticalTool" class="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-900">
+                        <strong>Immutable Critical Safeguard:</strong> This action is identified as a critical business operation. Human agent escalation, authentication, and visual confirmation are immutable and permanently enforced.
+                    </div>
+
                     <div>
                         <label class="block text-xs font-bold text-slate-700 mb-1">Risk Level</label>
                         <select
                             v-model="toolForm.risk_level"
-                            class="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:outline-none"
+                            :disabled="isCriticalTool"
+                            class="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:outline-none disabled:opacity-60"
                         >
                             <option value="low">Low</option>
                             <option value="normal">Normal</option>
@@ -115,15 +120,30 @@
                             <span>Tool is Active</span>
                         </label>
                         <label class="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
-                            <input type="checkbox" v-model="toolForm.requires_authentication" class="w-4 h-4 accent-slate-900 rounded" />
+                            <input
+                                type="checkbox"
+                                v-model="toolForm.requires_authentication"
+                                :disabled="isCriticalTool"
+                                class="w-4 h-4 accent-slate-900 rounded disabled:opacity-60"
+                            />
                             <span>Requires Authenticated Customer</span>
                         </label>
                         <label class="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
-                            <input type="checkbox" v-model="toolForm.requires_confirmation" class="w-4 h-4 accent-slate-900 rounded" />
+                            <input
+                                type="checkbox"
+                                v-model="toolForm.requires_confirmation"
+                                :disabled="isCriticalTool"
+                                class="w-4 h-4 accent-slate-900 rounded disabled:opacity-60"
+                            />
                             <span>Requires UI Action Confirmation Card</span>
                         </label>
                         <label class="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
-                            <input type="checkbox" v-model="toolForm.requires_human" class="w-4 h-4 accent-slate-900 rounded" />
+                            <input
+                                type="checkbox"
+                                v-model="toolForm.requires_human"
+                                :disabled="isCriticalTool"
+                                class="w-4 h-4 accent-slate-900 rounded disabled:opacity-60"
+                            />
                             <span>Requires Human Agent Escalation</span>
                         </label>
                     </div>
@@ -176,6 +196,11 @@ export default {
         isSaving() {
             return this.$store.getters['adminGovernance/isSaving'];
         },
+        isCriticalTool() {
+            if (!this.editingTool) return false;
+            const criticalKeys = ['request_refund', 'refund', 'cancel_order', 'cancel', 'change_address', 'change_payment_method', 'update_payment', 'change_password'];
+            return criticalKeys.includes(this.editingTool.key) || this.editingTool.risk_level === 'critical';
+        },
     },
     mounted() {
         this.loadTools();
@@ -186,12 +211,13 @@ export default {
         },
         openEditor(tool) {
             this.editingTool = tool;
+            const isCrit = ['request_refund', 'refund', 'cancel_order', 'cancel', 'change_address', 'change_payment_method', 'update_payment', 'change_password'].includes(tool.key) || tool.risk_level === 'critical';
             this.toolForm = {
-                risk_level: tool.risk_level,
+                risk_level: isCrit ? 'critical' : tool.risk_level,
                 is_active: Boolean(tool.is_active),
-                requires_authentication: Boolean(tool.requires_authentication),
-                requires_confirmation: Boolean(tool.requires_confirmation),
-                requires_human: Boolean(tool.requires_human),
+                requires_authentication: isCrit ? true : Boolean(tool.requires_authentication),
+                requires_confirmation: isCrit ? true : Boolean(tool.requires_confirmation),
+                requires_human: isCrit ? true : Boolean(tool.requires_human),
             };
         },
         savePermissions() {

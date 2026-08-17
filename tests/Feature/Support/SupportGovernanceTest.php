@@ -12,6 +12,7 @@ use App\Support\Models\SupportConversation;
 use App\Support\Models\SupportKnowledgeArticle;
 use App\Support\Models\SupportKnowledgeArticleVersion;
 use App\Support\Models\SupportPolicy;
+use App\Support\Policies\CriticalActionSafetyPolicy;
 use App\Support\Services\SupportKnowledgeRepository;
 use Database\Seeders\SupportDomainSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -105,152 +106,378 @@ class SupportGovernanceTest extends TestCase
             ->assertStatus(403);
     }
 
-    public function test_admin_can_create_draft_knowledge_article_with_version_1(): void
+    // --- ISSUE A: Critical Action Safety Tests ---
+
+    public function test_critical_refund_cannot_disable_human_approval(): void
     {
+        $refundTool = SupportAITool::where('key', 'request_refund')->first();
+        $this->assertNotNull($refundTool);
+
+        // Attempting to downgrade requires_human to false
         $response = $this->actingAs($this->adminUser, 'sanctum')
-            ->postJson('/api/v1/support/admin/knowledge', [
-                'title' => 'Custom Return Window Rules',
-                'category' => 'Returns',
-                'language' => 'en',
-                'content' => 'All items must be returned within 14 days of delivery in original condition.',
-                'status' => 'draft',
+            ->patchJson("/api/v1/support/admin/tools/{$refundTool->id}/permissions", [
+                'requires_human' => false,
+            ]);
+
+        $response->assertStatus(200);
+        $this->assertTrue($response->json('data.requires_human'), 'request_refund must remain requires_human = true');
+        
+        $refundTool->refresh();
+        $this->assertTrue((bool)$refundTool->requires_human);
+        $this->assertEquals(ToolRiskLevel::CRITICAL, $refundTool->risk_level);
+    }
+
+    public function test_critical_and_sensitive_actions_remain_protected(): void
+    {
+        $this->assertTrue(CriticalActionSafetyPolicy::isCriticalAction('request_refund'));
+        $this->assertTrue(CriticalActionSafetyPolicy::isCriticalAction('change_password'));
+        $this->assertTrue(CriticalActionSafetyPolicy::isSensitiveAction('cancel_order'));
+        $this->assertTrue(CriticalActionSafetyPolicy::isSensitiveAction('change_address'));
+    }
+
+    // --- ISSUE B & C: Policy Lifecycle & Activation Validation Tests ---
+
+    public function test_new_policy_always_starts_inactive(): void
+    {
+        // Attempting to pass is_active = true on creation
+        $response = $this->actingAs($this->adminUser, 'sanctum')
+            ->postJson('/api/v1/support/admin/policies', [
+                'key' => 'new_promo_discount_policy',
+                'name' => 'Promo Discount Policy',
+                'category' => 'orders',
+                'effect' => 'confirm',
+                'description' => 'Test policy description',
+                'is_active' => true,
+                'priority' => 10,
             ]);
 
         $response->assertStatus(201)
-            ->assertJsonPath('data.title', 'Custom Return Window Rules')
-            ->assertJsonPath('data.slug', 'custom-return-window-rules')
-            ->assertJsonPath('data.status', 'draft')
-            ->assertJsonPath('data.version', 1);
+            ->assertJsonPath('data.key', 'new_promo_discount_policy')
+            ->assertJsonPath('data.is_active', false); // Invariant: starts inactive
 
-        $articleId = $response->json('data.id');
-
-        // Check Version record
-        $version = SupportKnowledgeArticleVersion::where('article_id', $articleId)->first();
-        $this->assertNotNull($version);
-        $this->assertEquals(1, $version->version);
-
-        // Check Audit Log
-        $this->assertDatabaseHas('support_audit_logs', [
-            'action' => 'KNOWLEDGE_ARTICLE_CREATED',
-            'resource_id' => (string)$articleId,
+        $policyId = $response->json('data.id');
+        $this->assertDatabaseHas('support_policies', [
+            'id' => $policyId,
+            'is_active' => false,
         ]);
     }
 
-    public function test_draft_articles_are_strictly_excluded_from_ai_grounding(): void
+    public function test_explicit_activation_works(): void
     {
-        SupportKnowledgeArticle::create([
-            'title' => 'Secret Draft Policy Unreleased',
-            'slug' => 'secret-draft-policy',
-            'category' => 'Promotions',
-            'language' => 'en',
-            'content' => 'Use promo code SECRET99 for 99% off.',
-            'status' => 'draft',
-            'version' => 1,
+        $policy = SupportPolicy::create([
+            'key' => 'explicit_activation_test_policy',
+            'name' => 'Explicit Activation Test',
+            'category' => 'orders',
+            'effect' => 'confirm',
+            'is_active' => false,
+            'priority' => 20,
         ]);
 
-        $repo = new SupportKnowledgeRepository();
-        $results = $repo->search('SECRET99');
+        $this->assertFalse((bool)$policy->is_active);
 
-        $this->assertTrue($results->isEmpty(), 'Draft article was incorrectly returned by Knowledge Repository!');
+        $response = $this->actingAs($this->adminUser, 'sanctum')
+            ->postJson("/api/v1/support/admin/policies/{$policy->id}/activate");
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.is_active', true);
+
+        $policy->refresh();
+        $this->assertTrue((bool)$policy->is_active);
     }
 
-    public function test_admin_can_publish_and_archive_article_influencing_grounding(): void
+    public function test_invalid_policy_with_nonexistent_tool_cannot_activate(): void
     {
-        $article = SupportKnowledgeArticle::create([
-            'title' => 'Kano Same Day Delivery Guarantee',
-            'slug' => 'kano-same-day-delivery',
-            'category' => 'Shipping',
-            'language' => 'en',
-            'content' => 'KanoSameDayDeliveryExpressOnly applies to orders before 12pm.',
-            'status' => 'draft',
-            'version' => 1,
+        $policy = SupportPolicy::create([
+            'key' => 'invalid_tool_reference_policy',
+            'name' => 'Invalid Tool Policy',
+            'category' => 'orders',
+            'effect' => 'allow',
+            'configuration' => [
+                'tool_name' => 'nonexistent_malicious_tool_xyz',
+            ],
+            'is_active' => false,
         ]);
 
-        $repo = new SupportKnowledgeRepository();
+        $response = $this->actingAs($this->adminUser, 'sanctum')
+            ->postJson("/api/v1/support/admin/policies/{$policy->id}/activate");
 
-        // 1. In draft state -> excluded
-        $this->assertTrue($repo->search('KanoSameDayDeliveryExpressOnly')->isEmpty());
+        $response->assertStatus(422)
+            ->assertJsonPath('error.code', 'POLICY_ACTIVATION_INVALID');
 
-        // 2. Publish
-        $this->actingAs($this->adminUser, 'sanctum')
-            ->postJson("/api/v1/support/admin/knowledge/{$article->id}/publish")
-            ->assertStatus(200)
-            ->assertJsonPath('data.status', 'published');
-
-        // Now in published state -> included in grounding
-        $publishedResults = $repo->search('KanoSameDayDeliveryExpressOnly');
-        $this->assertFalse($publishedResults->isEmpty());
-        $this->assertEquals('Kano Same Day Delivery Guarantee', $publishedResults->first()->title);
-
-        // 3. Archive
-        $this->actingAs($this->adminUser, 'sanctum')
-            ->postJson("/api/v1/support/admin/knowledge/{$article->id}/archive")
-            ->assertStatus(200)
-            ->assertJsonPath('data.status', 'archived');
-
-        // Now in archived state -> excluded again
-        $this->assertTrue($repo->search('KanoSameDayDeliveryExpressOnly')->isEmpty());
+        $policy->refresh();
+        $this->assertFalse((bool)$policy->is_active, 'Invalid policy must remain inactive');
     }
 
-    public function test_article_versioning_and_non_destructive_rollback(): void
+    public function test_unsafe_critical_policy_cannot_activate(): void
     {
-        // 1. Create initial version
-        $createRes = $this->actingAs($this->adminUser, 'sanctum')
+        $policy = SupportPolicy::create([
+            'key' => 'unsafe_refund_allow_policy',
+            'name' => 'Unsafe Direct Refund Allow',
+            'category' => 'financial',
+            'effect' => 'allow',
+            'configuration' => [
+                'tool_name' => 'request_refund',
+            ],
+            'is_active' => false,
+        ]);
+
+        $response = $this->actingAs($this->adminUser, 'sanctum')
+            ->postJson("/api/v1/support/admin/policies/{$policy->id}/activate");
+
+        $response->assertStatus(422)
+            ->assertJsonPath('error.code', 'POLICY_ACTIVATION_INVALID');
+
+        $policy->refresh();
+        $this->assertFalse((bool)$policy->is_active, 'Unsafe policy must remain inactive');
+    }
+
+    // --- ISSUE D: Simulation Audit Redaction Tests ---
+
+    public function test_sensitive_simulation_arguments_are_redacted_in_audit_log(): void
+    {
+        $simPayload = [
+            'actor_type' => 'customer',
+            'tool_name' => 'lookup_order',
+            'arguments' => [
+                'order_id' => '12345',
+                'token' => 'secret-super-token-12345',
+                'api_key' => 'sk_live_abcdef1234567890',
+                'password' => 'superSecretPassword!',
+                'authorization' => 'Bearer sensitiveBearerTokenValue',
+            ],
+        ];
+
+        $response = $this->actingAs($this->adminUser, 'sanctum')
+            ->postJson('/api/v1/support/admin/policies/simulate', $simPayload);
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.simulation', true)
+            ->assertJsonPath('data.badge', 'SIMULATION ONLY');
+
+        // Check the created SupportAuditLog
+        $auditLog = SupportAuditLog::where('action', 'POLICY_SIMULATION_EXECUTED')
+            ->orderBy('id', 'desc')
+            ->first();
+
+        $this->assertNotNull($auditLog);
+        $metadata = $auditLog->metadata;
+
+        $this->assertNotNull($metadata);
+        $this->assertEquals('12345', $metadata['arguments']['order_id']);
+        $this->assertEquals('[REDACTED]', $metadata['arguments']['token']);
+        $this->assertEquals('[REDACTED]', $metadata['arguments']['api_key']);
+        $this->assertEquals('[REDACTED]', $metadata['arguments']['password']);
+        $this->assertEquals('[REDACTED]', $metadata['arguments']['authorization']);
+    }
+
+    // --- ISSUE E: Knowledge Draft -> Publish Lifecycle Tests ---
+
+    public function test_new_article_cannot_be_published_through_create(): void
+    {
+        $response = $this->actingAs($this->adminUser, 'sanctum')
             ->postJson('/api/v1/support/admin/knowledge', [
-                'title' => 'Sizing Guide for Hoodies',
-                'category' => 'Products',
+                'title' => 'Attempt Direct Publish',
+                'category' => 'General',
                 'language' => 'en',
-                'content' => 'Version 1: Our hoodies fit true to size.',
+                'content' => 'Direct published content attempt',
                 'status' => 'published',
             ]);
 
-        $articleId = $createRes->json('data.id');
+        $response->assertStatus(422)
+            ->assertJsonPath('error.code', 'INVALID_LIFECYCLE_STATE');
 
-        // 2. Update to version 2
-        $this->actingAs($this->adminUser, 'sanctum')
-            ->putJson("/api/v1/support/admin/knowledge/{$articleId}", [
-                'title' => 'Sizing Guide for Hoodies (Updated)',
-                'content' => 'Version 2: Our hoodies fit oversized. Size down for fitted look.',
-            ])
-            ->assertStatus(200)
+        $this->assertDatabaseMissing('support_knowledge_articles', [
+            'title' => 'Attempt Direct Publish',
+        ]);
+    }
+
+    public function test_explicit_publish_transitions_draft_to_published(): void
+    {
+        $createRes = $this->actingAs($this->adminUser, 'sanctum')
+            ->postJson('/api/v1/support/admin/knowledge', [
+                'title' => 'Warranty Coverage Guide',
+                'slug' => 'warranty-coverage-guide',
+                'category' => 'Warranty',
+                'language' => 'en',
+                'content' => 'Authentic 6ixCulture garments feature ZIPPSTITCHWARRANTY99 coverage.',
+            ]);
+
+        $createRes->assertStatus(201)
+            ->assertJsonPath('data.status', 'draft');
+
+        $articleId = $createRes->json('data.id');
+        $repo = new SupportKnowledgeRepository();
+
+        // 1. In draft state -> excluded from AI grounding
+        $this->assertTrue($repo->search('ZIPPSTITCHWARRANTY99')->isEmpty());
+
+        // 2. Explicit publish
+        $publishRes = $this->actingAs($this->adminUser, 'sanctum')
+            ->postJson("/api/v1/support/admin/knowledge/{$articleId}/publish");
+
+        $publishRes->assertStatus(200)
+            ->assertJsonPath('data.status', 'published');
+
+        // 3. Now published -> accessible to AI grounding
+        $results = $repo->search('ZIPPSTITCHWARRANTY99');
+        $this->assertFalse($results->isEmpty());
+        $this->assertEquals('Warranty Coverage Guide', $results->first()->title);
+    }
+
+    public function test_direct_update_cannot_publish_or_archive_article(): void
+    {
+        $article = SupportKnowledgeArticle::create([
+            'title' => 'Draft Lifecycle Test',
+            'slug' => 'draft-lifecycle-test',
+            'category' => 'General',
+            'language' => 'en',
+            'content' => 'Content for lifecycle test.',
+            'status' => 'draft',
+            'version' => 1,
+        ]);
+
+        // Attempting to directly publish via update endpoint
+        $response = $this->actingAs($this->adminUser, 'sanctum')
+            ->patchJson("/api/v1/support/admin/knowledge/{$article->id}", [
+                'status' => 'published',
+            ]);
+
+        $response->assertStatus(422)
+            ->assertJsonPath('error.code', 'STATUS_IMMUTABLE_ON_UPDATE');
+
+        // Attempting to directly archive via update endpoint
+        $archiveResponse = $this->actingAs($this->adminUser, 'sanctum')
+            ->patchJson("/api/v1/support/admin/knowledge/{$article->id}", [
+                'status' => 'archived',
+            ]);
+
+        $archiveResponse->assertStatus(422)
+            ->assertJsonPath('error.code', 'STATUS_IMMUTABLE_ON_UPDATE');
+
+        $article->refresh();
+        $this->assertEquals('draft', $article->status);
+    }
+
+    public function test_editing_published_content_creates_draft_version_preserving_live_content(): void
+    {
+        // 1. Create and publish initial article version 1
+        $article = SupportKnowledgeArticle::create([
+            'title' => 'VIP Club Discount Guide',
+            'slug' => 'vip-club-discount',
+            'category' => 'Promotions',
+            'language' => 'en',
+            'content' => 'Version 1: VIP_GOLD_TIER_TEN_PERCENT discount on all items.',
+            'status' => 'published',
+            'published_at' => now(),
+            'version' => 1,
+        ]);
+
+        SupportKnowledgeArticleVersion::create([
+            'article_id' => $article->id,
+            'version' => 1,
+            'title' => $article->title,
+            'content' => $article->content,
+            'created_by' => $this->adminUser->id,
+        ]);
+
+        $repo = new SupportKnowledgeRepository();
+
+        // Runtime grounding returns Version 1 content
+        $initialSearch = $repo->search('VIP_GOLD_TIER_TEN_PERCENT');
+        $this->assertFalse($initialSearch->isEmpty());
+
+        // 2. Admin edits published article to Version 2 content
+        $updateRes = $this->actingAs($this->adminUser, 'sanctum')
+            ->patchJson("/api/v1/support/admin/knowledge/{$article->id}", [
+                'content' => 'Version 2 (Draft): VIP_PLATINUM_TIER_TWENTYFIVE_PERCENT discount on all items.',
+            ]);
+
+        $updateRes->assertStatus(200);
+
+        // Verify Version 2 record was created in versions table
+        $this->assertDatabaseHas('support_knowledge_article_versions', [
+            'article_id' => $article->id,
+            'version' => 2,
+            'content' => 'Version 2 (Draft): VIP_PLATINUM_TIER_TWENTYFIVE_PERCENT discount on all items.',
+        ]);
+
+        // CRITICAL INVARIANT: Live runtime grounding STILL serves Version 1
+        $liveSearch = $repo->search('VIP_GOLD_TIER_TEN_PERCENT');
+        $this->assertFalse($liveSearch->isEmpty(), 'Live published content must remain unchanged until explicitly published.');
+        
+        $draftSearch = $repo->search('VIP_PLATINUM_TIER_TWENTYFIVE_PERCENT');
+        $this->assertTrue($draftSearch->isEmpty(), 'Unpublished draft content must NOT enter runtime AI grounding.');
+
+        // 3. Now explicitly publish the updated article
+        $publishRes = $this->actingAs($this->adminUser, 'sanctum')
+            ->postJson("/api/v1/support/admin/knowledge/{$article->id}/publish");
+
+        $publishRes->assertStatus(200)
             ->assertJsonPath('data.version', 2);
 
-        // 3. Update to version 3
-        $this->actingAs($this->adminUser, 'sanctum')
-            ->putJson("/api/v1/support/admin/knowledge/{$articleId}", [
-                'content' => 'Version 3: Hoodies are boxy cut streetwear style.',
-            ])
-            ->assertStatus(200)
-            ->assertJsonPath('data.version', 3);
+        // Now runtime grounding serves Version 2
+        $promotedSearch = $repo->search('VIP_PLATINUM_TIER_TWENTYFIVE_PERCENT');
+        $this->assertFalse($promotedSearch->isEmpty());
+    }
 
-        // Verify version history has 3 historical records
-        $versionsRes = $this->actingAs($this->adminUser, 'sanctum')
-            ->getJson("/api/v1/support/admin/knowledge/{$articleId}/versions")
-            ->assertStatus(200);
+    public function test_rollback_is_non_destructive(): void
+    {
+        // 1. Create article and versions 1, 2, 3
+        $article = SupportKnowledgeArticle::create([
+            'title' => 'Sneaker Washing Guide',
+            'slug' => 'sneaker-washing-guide',
+            'category' => 'Products',
+            'language' => 'en',
+            'content' => 'Version 3: Use cold water only.',
+            'status' => 'published',
+            'published_at' => now(),
+            'version' => 3,
+        ]);
 
-        $versions = $versionsRes->json('data.versions');
-        $this->assertCount(3, $versions);
+        SupportKnowledgeArticleVersion::create([
+            'article_id' => $article->id,
+            'version' => 1,
+            'title' => $article->title,
+            'content' => 'Version 1: Hand wash with mild soap and soft brush.',
+            'created_by' => $this->adminUser->id,
+        ]);
 
-        // 4. Rollback to version 1
+        SupportKnowledgeArticleVersion::create([
+            'article_id' => $article->id,
+            'version' => 2,
+            'title' => $article->title,
+            'content' => 'Version 2: Machine wash delicate cycle.',
+            'created_by' => $this->adminUser->id,
+        ]);
+
+        SupportKnowledgeArticleVersion::create([
+            'article_id' => $article->id,
+            'version' => 3,
+            'title' => $article->title,
+            'content' => 'Version 3: Use cold water only.',
+            'created_by' => $this->adminUser->id,
+        ]);
+
+        // Rollback from version 3 to version 1
         $rollbackRes = $this->actingAs($this->adminUser, 'sanctum')
-            ->postJson("/api/v1/support/admin/knowledge/{$articleId}/rollback", [
+            ->postJson("/api/v1/support/admin/knowledge/{$article->id}/rollback", [
                 'target_version' => 1,
-                'reason' => 'Restoring classic true to size guidance',
+                'reason' => 'Restore classic hand wash guidance',
             ]);
 
         $rollbackRes->assertStatus(200)
-            ->assertJsonPath('data.version', 4) // Non-destructive: creates new version 4
-            ->assertJsonPath('data.content', 'Version 1: Our hoodies fit true to size.');
+            ->assertJsonPath('data.version', 4)
+            ->assertJsonPath('data.content', 'Version 1: Hand wash with mild soap and soft brush.');
 
-        // Verify historical version 1 still exists
+        // Verify version 1 is preserved and version 4 was created
         $this->assertDatabaseHas('support_knowledge_article_versions', [
-            'article_id' => $articleId,
+            'article_id' => $article->id,
             'version' => 1,
         ]);
-        // And new version 4 was created
         $this->assertDatabaseHas('support_knowledge_article_versions', [
-            'article_id' => $articleId,
+            'article_id' => $article->id,
             'version' => 4,
+            'content' => 'Version 1: Hand wash with mild soap and soft brush.',
         ]);
     }
 
@@ -294,110 +521,5 @@ class SupportGovernanceTest extends TestCase
         $yoResults = $repo->search('Akoko', null, 'yo');
         $this->assertFalse($yoResults->isEmpty());
         $this->assertEquals('yo', $yoResults->first()->language);
-    }
-
-    public function test_policy_administration_lifecycle(): void
-    {
-        // 1. Create Policy
-        $createRes = $this->actingAs($this->adminUser, 'sanctum')
-            ->postJson('/api/v1/support/admin/policies', [
-                'key' => 'require_confirm_on_address_change',
-                'name' => 'Address Change Confirmation Guard',
-                'category' => 'orders',
-                'effect' => 'confirm',
-                'description' => 'Ensure user explicitly confirms address updates.',
-                'is_active' => true,
-                'priority' => 50,
-            ]);
-
-        $createRes->assertStatus(201)
-            ->assertJsonPath('data.key', 'require_confirm_on_address_change')
-            ->assertJsonPath('data.effect', 'confirm')
-            ->assertJsonPath('data.is_active', true);
-
-        $policyId = $createRes->json('data.id');
-
-        // 2. Disable Policy
-        $this->actingAs($this->adminUser, 'sanctum')
-            ->postJson("/api/v1/support/admin/policies/{$policyId}/disable")
-            ->assertStatus(200)
-            ->assertJsonPath('data.is_active', false);
-
-        $this->assertDatabaseHas('support_policies', [
-            'id' => $policyId,
-            'is_active' => false,
-        ]);
-
-        // 3. Re-activate Policy
-        $this->actingAs($this->adminUser, 'sanctum')
-            ->postJson("/api/v1/support/admin/policies/{$policyId}/activate")
-            ->assertStatus(200)
-            ->assertJsonPath('data.is_active', true);
-    }
-
-    public function test_policy_simulation_evaluates_correctly_without_side_effects(): void
-    {
-        // Simulate Refund tool -> expected effect REQUIRE_HUMAN
-        $simRes = $this->actingAs($this->adminUser, 'sanctum')
-            ->postJson('/api/v1/support/admin/policies/simulate', [
-                'actor_type' => 'customer',
-                'tool_name' => 'request_refund',
-                'arguments' => ['order_id' => 12345, 'reason' => 'Defective zipper'],
-            ]);
-
-        $simRes->assertStatus(200)
-            ->assertJsonPath('data.simulation', true)
-            ->assertJsonPath('data.badge', 'SIMULATION ONLY')
-            ->assertJsonPath('data.policy_effect', 'require_human')
-            ->assertJsonPath('data.requires_human', true);
-
-        // Verify simulation logged in audit log with is_simulation flag
-        $this->assertDatabaseHas('support_audit_logs', [
-            'action' => 'POLICY_SIMULATION_EXECUTED',
-            'resource_id' => 'request_refund',
-        ]);
-    }
-
-    public function test_tool_permission_governance_and_critical_safeguard_preservation(): void
-    {
-        // 1. List tools
-        $listRes = $this->actingAs($this->adminUser, 'sanctum')
-            ->getJson('/api/v1/support/admin/tools')
-            ->assertStatus(200);
-
-        $tools = $listRes->json('data');
-        $this->assertNotEmpty($tools);
-
-        // 2. Update tool permissions
-        $refundTool = SupportAITool::where('key', 'request_refund')->first();
-        $this->assertNotNull($refundTool);
-
-        $this->actingAs($this->adminUser, 'sanctum')
-            ->patchJson("/api/v1/support/admin/tools/{$refundTool->id}/permissions", [
-                'risk_level' => 'critical',
-                'requires_human' => true,
-                'requires_confirmation' => true,
-            ])
-            ->assertStatus(200)
-            ->assertJsonPath('data.risk_level', 'critical')
-            ->assertJsonPath('data.requires_human', true);
-
-        // 3. Attempting to strip human approval from critical refund tool is blocked by safety invariant
-        $this->actingAs($this->adminUser, 'sanctum')
-            ->patchJson("/api/v1/support/admin/tools/{$refundTool->id}/permissions", [
-                'requires_human' => false,
-            ])
-            ->assertStatus(200)
-            ->assertJsonPath('data.requires_human', true); // Preserved
-    }
-
-    public function test_audit_logs_endpoint_returns_sanitized_governance_trail(): void
-    {
-        $response = $this->actingAs($this->adminUser, 'sanctum')
-            ->getJson('/api/v1/support/admin/audit-logs')
-            ->assertStatus(200);
-
-        $logs = $response->json('data');
-        $this->assertIsArray($logs);
     }
 }

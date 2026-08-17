@@ -109,11 +109,8 @@ class ToolAdminController extends Controller
             'requires_human' => $tool->requires_human,
         ];
 
-        // Ensure critical actions cannot be completely stripped of safety controls
-        if ($tool->key === 'request_refund' && isset($validated['requires_human']) && !$validated['requires_human']) {
-            // Keep critical safeguard
-            $validated['requires_human'] = true;
-        }
+        // Enforce immutable centralized critical action safety policy
+        $validated = \App\Support\Policies\CriticalActionSafetyPolicy::enforceToolSafety($tool, $validated);
 
         $tool->update($validated);
 
