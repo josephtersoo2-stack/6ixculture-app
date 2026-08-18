@@ -134,6 +134,11 @@ class User extends Authenticatable implements HasMedia
     }
     public function returnOrders()
     {
-        $this->hasMany(ReturnOrder::class, 'user_id', 'id');
+        return $this->hasMany(ReturnOrder::class, 'user_id', 'id');
+    }
+
+    public function supportPreference(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->hasOne(\App\Support\Models\SupportCustomerPreference::class, 'user_id');
     }
 }

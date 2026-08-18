@@ -42,6 +42,9 @@ class SupportPhase8AdvancedVoiceTest extends TestCase
     {
         parent::setUp();
 
+        putenv('OPENROUTER_API_KEY=test_openrouter_sk_key');
+        putenv('GEMINI_API_KEY=test_gemini_api_key');
+
         $this->seed(SupportDomainSeeder::class);
 
         \App\Models\AiAgent::firstOrCreate(['slug' => 'openrouter'], ['name' => 'OpenRouter', 'status' => 5]);
@@ -335,5 +338,223 @@ class SupportPhase8AdvancedVoiceTest extends TestCase
             'conversation_id' => $conv->id,
             'content' => 'Order successfully cancelled.',
         ]);
+    }
+
+    public function test_authenticated_language_preference_persists_and_new_conversation_inherits_it(): void
+    {
+        $conv1 = SupportConversation::create([
+            'customer_id' => $this->customer->id,
+            'status' => ConversationStatus::AI_ACTIVE,
+            'language' => 'en',
+        ]);
+
+        // Explicitly switch language to Yoruba in conversation 1
+        $res = $this->actingAs($this->customer, 'sanctum')
+            ->postJson("/api/v1/support/conversations/{$conv1->public_id}/language", [
+                'language' => 'yo',
+            ]);
+        $res->assertStatus(200);
+
+        // Verify customer support preference record was persisted
+        $this->assertDatabaseHas('support_customer_preferences', [
+            'user_id' => $this->customer->id,
+            'preferred_language' => 'yo',
+        ]);
+
+        // Close/resolve previous conversation so a new conversation can be initiated
+        $conv1->update(['status' => ConversationStatus::RESOLVED]);
+
+        // Create new conversation without specifying language -> must inherit persisted customer preference 'yo'
+        $newConvRes = $this->actingAs($this->customer, 'sanctum')
+            ->postJson('/api/v1/support/conversations', []);
+
+        $newConvRes->assertStatus(201);
+        $this->assertEquals('yo', $newConvRes->json('data.conversation.language'));
+    }
+
+    public function test_voice_preference_persists_and_new_conversation_inherits_it(): void
+    {
+        $conv1 = SupportConversation::create([
+            'customer_id' => $this->customer->id,
+            'status' => ConversationStatus::AI_ACTIVE,
+            'language' => 'en',
+        ]);
+
+        // Update voice preference in conversation 1
+        $res = $this->actingAs($this->customer, 'sanctum')
+            ->postJson("/api/v1/support/conversations/{$conv1->public_id}/voice/preferences", [
+                'voice' => 'onyx',
+                'speaking_rate' => 1.25,
+                'language' => 'ig',
+            ]);
+        $res->assertStatus(200);
+
+        // Verify customer support preference record was persisted in database
+        $this->assertDatabaseHas('support_customer_preferences', [
+            'user_id' => $this->customer->id,
+            'preferred_voice' => 'onyx',
+            'preferred_speaking_rate' => 1.25,
+            'preferred_language' => 'ig',
+        ]);
+
+        // Close/resolve previous conversation so a new conversation can be initiated
+        $conv1->update(['status' => ConversationStatus::RESOLVED]);
+
+        // Create new conversation without specifying voice/language -> inherits customer preferences
+        $newConvRes = $this->actingAs($this->customer, 'sanctum')
+            ->postJson('/api/v1/support/conversations', []);
+
+        $newConvRes->assertStatus(201);
+        $this->assertEquals('ig', $newConvRes->json('data.conversation.language'));
+        $this->assertEquals('onyx', $newConvRes->json('data.conversation.metadata.preferred_voice'));
+        $this->assertEquals(1.25, $newConvRes->json('data.conversation.metadata.preferred_speaking_rate'));
+    }
+
+    public function test_unauthorized_customer_cannot_modify_another_customers_preference(): void
+    {
+        $conv = SupportConversation::create([
+            'customer_id' => $this->customer->id,
+            'status' => ConversationStatus::AI_ACTIVE,
+            'language' => 'en',
+        ]);
+
+        // Other customer attempts to switch language on Customer 1's conversation
+        $res = $this->actingAs($this->otherCustomer, 'sanctum')
+            ->postJson("/api/v1/support/conversations/{$conv->public_id}/language", [
+                'language' => 'ha',
+            ]);
+
+        $res->assertStatus(404);
+
+        // Verify Customer 1's preference remains unchanged
+        $this->assertDatabaseMissing('support_customer_preferences', [
+            'user_id' => $this->customer->id,
+            'preferred_language' => 'ha',
+        ]);
+    }
+
+    public function test_guest_preference_remains_conversation_scoped_and_does_not_leak(): void
+    {
+        $guestToken1 = (string)Str::uuid();
+        $guestConv1 = SupportConversation::create([
+            'customer_id' => null,
+            'guest_session_id' => $guestToken1,
+            'status' => ConversationStatus::AI_ACTIVE,
+            'language' => 'en',
+        ]);
+
+        // Guest switches language on conversation 1
+        $res = $this->withHeader('X-Guest-Token', $guestToken1)
+            ->postJson("/api/v1/support/conversations/{$guestConv1->public_id}/language", [
+                'language' => 'yo',
+            ]);
+        $res->assertStatus(200);
+
+        // Verify guest action does NOT write to customer preferences table
+        $this->assertEquals(0, \App\Support\Models\SupportCustomerPreference::count());
+
+        // New unrelated guest conversation remains default 'en'
+        $guestToken2 = (string)Str::uuid();
+        $newGuestRes = $this->withHeader('X-Guest-Token', $guestToken2)
+            ->postJson('/api/v1/support/conversations', []);
+
+        $newGuestRes->assertStatus(201);
+        $this->assertEquals('en', $newGuestRes->json('data.conversation.language'));
+    }
+
+    public function test_preference_survives_new_request_session_context(): void
+    {
+        // Set preference
+        $prefService = new \App\Support\Services\Customer\CustomerPreferenceService();
+        $prefService->updatePreferences($this->customer->id, [
+            'preferred_support_language' => 'ha',
+            'preferred_support_voice' => 'shimmer',
+            'preferred_support_speaking_rate' => 0.85,
+        ]);
+
+        // In a fresh request context, create a conversation
+        $res = $this->actingAs($this->customer, 'sanctum')
+            ->postJson('/api/v1/support/conversations', []);
+
+        $res->assertStatus(201);
+        $this->assertEquals('ha', $res->json('data.conversation.language'));
+        $this->assertEquals('shimmer', $res->json('data.conversation.metadata.preferred_voice'));
+        $this->assertEquals(0.85, $res->json('data.conversation.metadata.preferred_speaking_rate'));
+    }
+
+    public function test_capability_report_reflects_configured_provider(): void
+    {
+        $mockStt = $this->createMock(SpeechToTextInterface::class);
+        $mockStt->method('isConfigured')->willReturn(true);
+        $mockStt->method('capabilities')->willReturn([
+            'provider' => 'test_custom_stt',
+            'enabled' => true,
+            'languages' => [
+                'en' => ['name' => 'English', 'native' => 'English', 'supported' => true],
+                'yo' => ['name' => 'Yoruba', 'native' => 'Yorùbá', 'supported' => true],
+            ],
+            'audio_formats' => ['audio/webm'],
+            'max_duration_seconds' => 45,
+            'code_switching' => true,
+        ]);
+
+        $this->app->instance(SpeechToTextInterface::class, $mockStt);
+
+        $res = $this->getJson('/api/v1/support/voice/capabilities');
+        $res->assertStatus(200);
+
+        $this->assertEquals('test_custom_stt', $res->json('data.stt.provider'));
+        $this->assertTrue($res->json('data.stt.enabled'));
+        $this->assertEquals(45, $res->json('data.stt.max_duration_seconds'));
+    }
+
+    public function test_unconfigured_provider_is_not_reported_as_active(): void
+    {
+        $mockStt = $this->createMock(SpeechToTextInterface::class);
+        $mockStt->method('isConfigured')->willReturn(false);
+        $mockStt->method('capabilities')->willReturn([
+            'provider' => 'unconfigured_stt',
+            'enabled' => false,
+            'languages' => [
+                'en' => ['name' => 'English', 'native' => 'English', 'supported' => false],
+            ],
+            'audio_formats' => [],
+            'max_duration_seconds' => 0,
+            'code_switching' => false,
+        ]);
+
+        $this->app->instance(SpeechToTextInterface::class, $mockStt);
+
+        $res = $this->getJson('/api/v1/support/voice/capabilities');
+        $res->assertStatus(200);
+
+        $this->assertFalse($res->json('data.stt.enabled'));
+        $this->assertFalse($res->json('data.stt.languages.en.supported'));
+    }
+
+    public function test_tts_fallback_is_accurately_reported(): void
+    {
+        $res = $this->getJson('/api/v1/support/voice/capabilities');
+        $res->assertStatus(200);
+
+        $ttsData = $res->json('data.tts');
+        $this->assertFalse($ttsData['languages']['yo']['supported']);
+        $this->assertEquals('en-NG', $ttsData['languages']['yo']['fallback']);
+        $this->assertFalse($ttsData['languages']['ig']['supported']);
+        $this->assertEquals('en-NG', $ttsData['languages']['ig']['fallback']);
+    }
+
+    public function test_capability_response_contains_no_secrets_or_internal_endpoints(): void
+    {
+        $res = $this->getJson('/api/v1/support/voice/capabilities');
+        $res->assertStatus(200);
+
+        $content = $res->getContent();
+        $this->assertStringNotContainsString('api_key', $content);
+        $this->assertStringNotContainsString('apiKey', $content);
+        $this->assertStringNotContainsString('secret', $content);
+        $this->assertStringNotContainsString('sk-', $content);
+        $this->assertStringNotContainsString('https://api.openai.com', $content);
+        $this->assertStringNotContainsString('https://generativelanguage.googleapis.com', $content);
     }
 }

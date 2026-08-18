@@ -118,4 +118,46 @@ class OpenAiTtsAdapter implements TextToSpeechInterface
             ];
         }
     }
+
+    /**
+     * Check if provider is configured.
+     */
+    public function isConfigured(): bool
+    {
+        return !empty($this->apiKey);
+    }
+
+    /**
+     * Get TTS provider capabilities.
+     */
+    public function capabilities(): array
+    {
+        $configured = $this->isConfigured();
+
+        return [
+            'provider' => 'openai_tts',
+            'enabled' => $configured,
+            'languages' => [
+                'en' => ['supported' => $configured, 'locale' => 'en-NG', 'fallback' => 'en-US'],
+                'yo' => ['supported' => false, 'locale' => 'yo-NG', 'fallback' => 'en-NG'],
+                'ig' => ['supported' => false, 'locale' => 'ig-NG', 'fallback' => 'en-NG'],
+                'ha' => ['supported' => false, 'locale' => 'ha-NG', 'fallback' => 'en-NG'],
+            ],
+            'voices' => [
+                ['id' => 'alloy', 'name' => 'Alloy (Neutral & Crisp)', 'gender' => 'neutral'],
+                ['id' => 'echo', 'name' => 'Echo (Warm & Authoritative)', 'gender' => 'male'],
+                ['id' => 'fable', 'name' => 'Fable (Expressive)', 'gender' => 'neutral'],
+                ['id' => 'onyx', 'name' => 'Onyx (Deep & Professional)', 'gender' => 'male'],
+                ['id' => 'nova', 'name' => 'Nova (Friendly Concierge)', 'gender' => 'female'],
+                ['id' => 'shimmer', 'name' => 'Shimmer (Bright & Clear)', 'gender' => 'female'],
+            ],
+            'default_voice' => $this->defaultVoice,
+            'speaking_rate' => [
+                'min' => 0.75,
+                'max' => 1.5,
+                'default' => 1.0,
+            ],
+            'formats' => ['mp3', 'opus', 'aac'],
+        ];
+    }
 }

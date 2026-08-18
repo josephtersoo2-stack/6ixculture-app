@@ -48,7 +48,7 @@ class SupportVoiceController extends Controller
         $this->tts = $tts ?? (app()->bound(TextToSpeechInterface::class) ? app(TextToSpeechInterface::class) : VoiceProviderFactory::makeTts());
         $this->langDetector = $langDetector ?? new LanguageDetectionService();
         $this->transcriptNormalizer = $transcriptNormalizer ?? new TranscriptNormalizationService();
-        $this->capabilityService = $capabilityService ?? new VoiceCapabilityService();
+        $this->capabilityService = $capabilityService ?? new VoiceCapabilityService($this->stt, $this->tts);
     }
 
     /**
@@ -236,6 +236,21 @@ class SupportVoiceController extends Controller
             $conv->language = $validated['language'];
         }
         $conv->save();
+
+        // If authenticated customer owns conversation, update durable customer preferences
+        if ($conv->customer_id) {
+            $prefData = [];
+            if (!empty($validated['language'])) $prefData['preferred_support_language'] = $validated['language'];
+            if (!empty($validated['voice'])) $prefData['preferred_support_voice'] = $validated['voice'];
+            if (!empty($validated['speaking_rate'])) $prefData['preferred_support_speaking_rate'] = (float)$validated['speaking_rate'];
+
+            if (!empty($prefData)) {
+                app(\App\Support\Services\Customer\CustomerPreferenceService::class)->updatePreferences(
+                    $conv->customer_id,
+                    $prefData
+                );
+            }
+        }
 
         return response()->json([
             'data' => [

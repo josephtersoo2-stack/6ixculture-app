@@ -106,7 +106,7 @@ export default {
             this.$store.dispatch('frontendSupport/closeWidget');
         },
         handleLanguageChange(lang) {
-            this.$store.dispatch('frontendSupport/setLanguage', lang);
+            this.$store.dispatch('frontendSupport/switchLanguage', lang);
         },
         handleHumanHandoff() {
             this.$store.dispatch('frontendSupport/requestHumanHandoff');

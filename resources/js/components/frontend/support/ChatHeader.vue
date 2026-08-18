@@ -26,13 +26,12 @@
             <select
                 :value="language"
                 @change="onLanguageChange($event.target.value)"
-                class="bg-slate-900 text-slate-300 text-[11px] font-medium border border-slate-800 rounded-lg px-2 py-1 focus:outline-none focus:border-slate-600"
-                title="Select Language"
+                class="bg-slate-900 text-slate-300 text-[11px] font-medium border border-slate-800 rounded-lg px-2 py-1 focus:outline-none focus:border-slate-600 cursor-pointer"
+                title="Select Support Language"
             >
-                <option value="en">English (EN)</option>
-                <option value="yo">Yorùbá (YO)</option>
-                <option value="ig">Igbo (IG)</option>
-                <option value="ha">Hausa (HA)</option>
+                <option v-for="l in availableLanguages" :key="l.code" :value="l.code">
+                    {{ l.label }}
+                </option>
             </select>
 
             <!-- Human Handoff button -->
@@ -83,6 +82,27 @@ export default {
         },
         isHumanMode() {
             return this.conversation?.mode === 'hybrid' || this.conversation?.mode === 'human' || this.conversation?.status === 'queued';
+        },
+        availableLanguages() {
+            const caps = this.$store.getters['frontendSupport/capabilities'];
+            const ttsLangs = caps?.tts?.languages || {};
+
+            const map = {
+                en: { name: 'English', native: 'English' },
+                yo: { name: 'Yoruba', native: 'Yorùbá' },
+                ig: { name: 'Igbo', native: 'Igbo' },
+                ha: { name: 'Hausa', native: 'Hausa' },
+            };
+
+            return ['en', 'yo', 'ig', 'ha'].map((code) => {
+                const native = map[code]?.native || code.toUpperCase();
+                const isNativeTts = ttsLangs[code]?.supported === true;
+                return {
+                    code,
+                    native,
+                    label: isNativeTts ? `${native} (${code.toUpperCase()})` : `${native} (${code.toUpperCase()}) • Fallback Voice`,
+                };
+            });
         },
     },
     methods: {

@@ -20,4 +20,16 @@ interface TextToSpeechInterface
      * ]
      */
     public function synthesize(string $text, string $language = 'en', array $options = []): array;
+
+    /**
+     * Get provider capability metadata (supported languages, locales, voices, speaking rates, audio formats).
+     *
+     * @return array<string, mixed>
+     */
+    public function capabilities(): array;
+
+    /**
+     * Check if the provider is properly configured with credentials.
+     */
+    public function isConfigured(): bool;
 }

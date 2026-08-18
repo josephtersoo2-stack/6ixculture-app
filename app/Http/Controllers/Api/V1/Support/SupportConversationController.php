@@ -95,15 +95,34 @@ class SupportConversationController extends Controller
             }
         }
 
+        $prefService = app(\App\Support\Services\Customer\CustomerPreferenceService::class);
+        $userPrefs = $customerId ? $prefService->getPreferences($customerId) : $prefService->getDefaults();
+
+        $effectiveLang = 'en';
+        if ($request->filled('language')) {
+            $effectiveLang = $request->input('language');
+            if ($customerId) {
+                $prefService->updatePreferences($customerId, ['preferred_support_language' => $effectiveLang]);
+            }
+        } elseif ($customerId) {
+            $effectiveLang = $userPrefs['preferred_support_language'] ?? 'en';
+        }
+
         $sessionGuestToken = $customerId ? null : ($guestToken ?: (string)Str::uuid());
+
+        $meta = [
+            'preferred_voice' => $userPrefs['preferred_support_voice'] ?? 'nova',
+            'preferred_speaking_rate' => $userPrefs['preferred_support_speaking_rate'] ?? 1.0,
+        ];
 
         $conversation = SupportConversation::create([
             'customer_id' => $customerId,
             'guest_session_id' => $sessionGuestToken,
             'status' => ConversationStatus::AI_ACTIVE,
             'mode' => ConversationMode::AI,
-            'language' => $request->input('language', 'en'),
+            'language' => $effectiveLang,
             'subject' => $request->input('subject', 'Customer Support Inquiry'),
+            'metadata' => $meta,
         ]);
 
         return response()->json([
@@ -479,11 +498,17 @@ class SupportConversationController extends Controller
             return $this->errorNotFound();
         }
 
+        $prefService = app(\App\Support\Services\Customer\CustomerPreferenceService::class);
+        $customerPrefs = $conv->customer_id ? $prefService->getPreferences($conv->customer_id) : $prefService->getDefaults();
+
         return response()->json([
             'data' => [
                 'language' => $conv->language ?: 'en',
                 'conversation_id' => $conv->public_id,
                 'supported_languages' => ['en', 'yo', 'ig', 'ha'],
+                'customer_preferred_language' => $customerPrefs['preferred_support_language'] ?? 'en',
+                'customer_preferred_voice' => $customerPrefs['preferred_support_voice'] ?? 'nova',
+                'customer_preferred_speaking_rate' => $customerPrefs['preferred_support_speaking_rate'] ?? 1.0,
             ],
             'message' => 'Language retrieved successfully.',
         ], 200);
@@ -506,11 +531,12 @@ class SupportConversationController extends Controller
 
         $conv->update(['language' => $validated['language']]);
 
-        // If authenticated user, optionally persist preference in user metadata
-        $user = $request->user('sanctum') ?? Auth::guard('sanctum')->user() ?? Auth::user();
-        if ($user) {
-            // Persist language on session
-            session(['customer_support_language' => $validated['language']]);
+        // If authenticated customer owns conversation, update durable customer preferences
+        if ($conv->customer_id) {
+            app(\App\Support\Services\Customer\CustomerPreferenceService::class)->updatePreferences(
+                $conv->customer_id,
+                ['preferred_support_language' => $validated['language']]
+            );
         }
 
         return response()->json([

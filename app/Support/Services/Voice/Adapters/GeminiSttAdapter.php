@@ -101,4 +101,34 @@ class GeminiSttAdapter implements SpeechToTextInterface
             ];
         }
     }
+
+    /**
+     * Check if provider is configured.
+     */
+    public function isConfigured(): bool
+    {
+        return !empty($this->apiKey);
+    }
+
+    /**
+     * Get STT provider capabilities.
+     */
+    public function capabilities(): array
+    {
+        $configured = $this->isConfigured();
+
+        return [
+            'provider' => 'gemini_stt',
+            'enabled' => $configured,
+            'languages' => [
+                'en' => ['name' => 'English', 'native' => 'English', 'supported' => $configured],
+                'yo' => ['name' => 'Yoruba', 'native' => 'Yorùbá', 'supported' => $configured],
+                'ig' => ['name' => 'Igbo', 'native' => 'Igbo', 'supported' => $configured],
+                'ha' => ['name' => 'Hausa', 'native' => 'Hausa', 'supported' => $configured],
+            ],
+            'audio_formats' => ['audio/webm', 'audio/mp4', 'audio/wav', 'audio/ogg', 'audio/mpeg'],
+            'max_duration_seconds' => 60,
+            'code_switching' => $configured,
+        ];
+    }
 }

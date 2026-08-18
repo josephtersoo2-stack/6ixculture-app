@@ -20,4 +20,16 @@ interface SpeechToTextInterface
      * ]
      */
     public function transcribe(UploadedFile|string $audio, string $language = 'en'): array;
+
+    /**
+     * Get provider capability metadata (supported languages, audio formats, max duration, code-switching).
+     *
+     * @return array<string, mixed>
+     */
+    public function capabilities(): array;
+
+    /**
+     * Check if the provider is properly configured with credentials.
+     */
+    public function isConfigured(): bool;
 }

@@ -29,6 +29,7 @@ class SupportConversationDetailResource extends JsonResource
                 'guest_token' => $this->customer_id ? null : $this->guest_session_id,
                 'created_at' => $this->created_at?->toIso8601String(),
                 'updated_at' => $this->updated_at?->toIso8601String(),
+                'metadata' => $this->metadata,
             ],
             'messages' => SupportMessageResource::collection($messages),
         ];

@@ -16,6 +16,7 @@ export const frontendSupport = {
         guestToken: localStorage.getItem('6ix_support_guest_token') || null,
         unreadCount: 0,
         pollingTimer: null,
+        capabilities: null,
         // Voice State (Phase 6)
         voiceState: 'idle', // idle, recording, processing, speaking, interrupted, error
         voiceSessionId: null,
@@ -36,14 +37,16 @@ export const frontendSupport = {
         unreadCount: (state) => state.unreadCount,
         voiceState: (state) => state.voiceState,
         isRealtimeConnected: (state) => state.isRealtimeConnected,
+        capabilities: (state) => state.capabilities,
     },
     actions: {
         toggleWidget({ commit, state, dispatch }) {
             commit('SET_IS_OPEN', !state.isOpen);
-            if (state.isOpen && !state.conversation) {
-                dispatch('initConversation');
-            }
             if (state.isOpen) {
+                dispatch('fetchCapabilities');
+                if (!state.conversation) {
+                    dispatch('initConversation');
+                }
                 commit('RESET_UNREAD');
             }
         },
@@ -54,15 +57,46 @@ export const frontendSupport = {
         openWidget({ commit, dispatch, state }) {
             commit('SET_IS_OPEN', true);
             commit('RESET_UNREAD');
+            dispatch('fetchCapabilities');
             if (!state.conversation) {
                 dispatch('initConversation');
             }
+        },
+        fetchCapabilities({ commit }) {
+            return axios.get('/v1/support/voice/capabilities').then((res) => {
+                commit('SET_CAPABILITIES', res.data.data);
+                return res.data.data;
+            }).catch(() => {});
         },
         setLanguage({ commit, state }, language) {
             commit('SET_LANGUAGE', language);
             if (state.conversation) {
                 state.conversation.language = language;
             }
+        },
+        switchLanguage({ commit, state }, language) {
+            commit('SET_LANGUAGE', language);
+            if (state.conversation) {
+                state.conversation.language = language;
+                return axios.post(`/v1/support/conversations/${state.conversation.id}/language`, {
+                    language: language,
+                    guest_token: state.guestToken,
+                }, {
+                    headers: state.guestToken ? { 'X-Guest-Token': state.guestToken } : {}
+                }).catch(() => {});
+            }
+            return Promise.resolve();
+        },
+        updateVoicePreferences({ commit, state }, { voice, speakingRate, language }) {
+            if (!state.conversation) return Promise.resolve();
+            return axios.post(`/v1/support/conversations/${state.conversation.id}/voice/preferences`, {
+                voice,
+                speaking_rate: speakingRate,
+                language: language || state.language,
+                guest_token: state.guestToken,
+            }, {
+                headers: state.guestToken ? { 'X-Guest-Token': state.guestToken } : {}
+            });
         },
         initConversation({ commit, state, dispatch }) {
             commit('SET_LOADING', true);
@@ -455,5 +489,6 @@ export const frontendSupport = {
         SET_VOICE_SESSION_ID: (state, payload) => { state.voiceSessionId = payload; },
         SET_VOICE_AUDIO_EL: (state, payload) => { state.voiceAudioEl = payload; },
         SET_REALTIME_CONNECTED: (state, payload) => { state.isRealtimeConnected = payload; },
+        SET_CAPABILITIES: (state, payload) => { state.capabilities = payload; },
     },
 };
