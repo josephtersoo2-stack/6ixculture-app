@@ -18,6 +18,11 @@ class SupportConversationDetailResource extends JsonResource
             ->orderBy('id', 'asc')
             ->get();
 
+        $safeMetadata = $this->metadata;
+        if (is_array($safeMetadata)) {
+            unset($safeMetadata['legacy_migration']);
+        }
+
         return [
             'conversation' => [
                 'id' => $this->public_id,
@@ -29,7 +34,7 @@ class SupportConversationDetailResource extends JsonResource
                 'guest_token' => $this->customer_id ? null : $this->guest_session_id,
                 'created_at' => $this->created_at?->toIso8601String(),
                 'updated_at' => $this->updated_at?->toIso8601String(),
-                'metadata' => $this->metadata,
+                'metadata' => $safeMetadata,
             ],
             'messages' => SupportMessageResource::collection($messages),
         ];
