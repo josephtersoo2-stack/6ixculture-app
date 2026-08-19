@@ -21,4 +21,14 @@ interface AiProviderInterface
     public function supportsStructuredOutput(): bool;
 
     public function supportsStreaming(): bool;
+
+    /**
+     * Check if the provider has valid runtime credentials and configuration.
+     */
+    public function isConfigured(): bool;
+
+    /**
+     * Get the safe provider identifier (e.g. 'openrouter', 'gemini').
+     */
+    public function providerName(): string;
 }

@@ -5,6 +5,7 @@ namespace Tests\Feature\Support;
 use App\Models\AiAgent;
 use App\Models\ChatConversation;
 use App\Models\ChatMessage;
+use App\Models\GatewayOption;
 use App\Models\User;
 use App\Support\Cutover\SupportCutoverManager;
 use App\Support\Cutover\SupportReadinessService;
@@ -20,6 +21,7 @@ use App\Support\Models\SupportMessage;
 use App\Support\Models\SupportPolicy;
 use App\Support\Models\SupportTicket;
 use App\Support\Models\SupportVoiceSession;
+use App\Support\Services\AiProviderFactory;
 use Carbon\Carbon;
 use Database\Seeders\SupportDomainSeeder;
 use Dipokhalder\Settings\Facades\Settings;
@@ -36,6 +38,7 @@ class SupportPhase10CutoverTest extends TestCase
     protected User $agent;
     protected User $admin;
     protected AiAgent $openRouterAgent;
+    protected AiAgent $geminiAgent;
 
     protected function setUp(): void
     {
@@ -50,7 +53,7 @@ class SupportPhase10CutoverTest extends TestCase
             ['slug' => 'openrouter'],
             ['name' => 'OpenRouter', 'status' => 5]
         );
-        AiAgent::firstOrCreate(
+        $this->geminiAgent = AiAgent::firstOrCreate(
             ['slug' => 'gemini'],
             ['name' => 'Gemini', 'status' => 5]
         );
@@ -127,7 +130,7 @@ class SupportPhase10CutoverTest extends TestCase
         $this->assertNotNull($audit);
     }
 
-    // 4. Test 1 & 2: support -> draining is rejected and leaves state = support
+    // 4. support -> draining is rejected and leaves state = support
     public function test_support_to_draining_transition_is_rejected_and_fails_closed(): void
     {
         // Transition to support
@@ -150,7 +153,7 @@ class SupportPhase10CutoverTest extends TestCase
         $this->assertEquals('support_to_draining', $audit->metadata['attempted_transition']);
     }
 
-    // 5. Test 3 & 4: support -> draining cannot be used to bypass rollback guard
+    // 5. support -> draining cannot be used to bypass rollback guard
     public function test_support_to_draining_cannot_bypass_rollback_guard(): void
     {
         SupportCutoverManager::enterDraining();
@@ -178,7 +181,7 @@ class SupportPhase10CutoverTest extends TestCase
         $this->assertStringContainsString('Rollback blocked', $rollbackAttempt['message']);
     }
 
-    // 6. Test 5: Rollback blocked after post-cutover assignment
+    // 6. Rollback blocked after post-cutover assignment
     public function test_rollback_blocked_after_post_cutover_agent_assignment(): void
     {
         SupportCutoverManager::enterDraining();
@@ -204,7 +207,7 @@ class SupportPhase10CutoverTest extends TestCase
         $this->assertEquals(SupportCutoverManager::STATE_SUPPORT, SupportCutoverManager::getState());
     }
 
-    // 7. Test 6: Rollback blocked after relevant post-cutover critical/audited action
+    // 7. Rollback blocked after relevant post-cutover critical/audited action
     public function test_rollback_blocked_after_post_cutover_domain_audit_action(): void
     {
         SupportCutoverManager::enterDraining();
@@ -231,7 +234,7 @@ class SupportPhase10CutoverTest extends TestCase
         $this->assertEquals(SupportCutoverManager::STATE_SUPPORT, SupportCutoverManager::getState());
     }
 
-    // 8. Test 7: activateSupport from legacy is rejected until draining
+    // 8. activateSupport from legacy is rejected until draining
     public function test_activate_support_from_legacy_is_rejected_until_draining(): void
     {
         $this->assertEquals(SupportCutoverManager::STATE_LEGACY, SupportCutoverManager::getState());
@@ -243,7 +246,7 @@ class SupportPhase10CutoverTest extends TestCase
         $this->assertStringContainsString('Cannot activate Support directly from legacy mode', $result['message']);
     }
 
-    // 9. Test 8: activateSupport from support is idempotent
+    // 9. activateSupport from support is idempotent
     public function test_activate_support_from_support_is_idempotent(): void
     {
         SupportCutoverManager::enterDraining();
@@ -257,10 +260,9 @@ class SupportPhase10CutoverTest extends TestCase
         $this->assertEquals(SupportCutoverManager::STATE_SUPPORT, SupportCutoverManager::getState());
     }
 
-    // 10. Test 9: Preflight fails when required Support table readiness is false
+    // 10. Preflight fails when required Support table readiness is false
     public function test_preflight_fails_when_support_table_is_missing(): void
     {
-        // Mock missing table by checking readiness against non-existent table in service
         Schema::dropIfExists('support_customer_preferences');
 
         $readinessService = new SupportReadinessService();
@@ -270,31 +272,29 @@ class SupportPhase10CutoverTest extends TestCase
         $this->assertEquals('blocked', $readiness['status']);
         $this->assertNotEmpty($readiness['blockers']);
 
-        // Artisan preflight fails
         $this->artisan('support:cutover', ['--preflight' => true])
             ->assertExitCode(1);
     }
 
-    // 11. Test 10: Preflight fails when critical AI provider readiness is false
+    // 11. Preflight fails when critical AI provider readiness is false
     public function test_preflight_fails_when_ai_provider_unconfigured(): void
     {
         putenv('OPENROUTER_API_KEY=');
         putenv('GEMINI_API_KEY=');
         putenv('OPENAI_API_KEY=');
-        Settings::group('site')->set('site_default_ai_agent', null);
 
         $readinessService = new SupportReadinessService();
         $readiness = $readinessService->getReadiness();
 
         $this->assertFalse($readiness['ready']);
         $this->assertEquals('blocked', $readiness['status']);
-        $this->assertStringContainsString('No active AI provider configured', $readiness['blockers'][0]);
+        $this->assertStringContainsString('is not configured with valid credentials', $readiness['blockers'][0]);
 
         $this->artisan('support:cutover', ['--preflight' => true])
             ->assertExitCode(1);
     }
 
-    // 12. Test 11: Preflight fails when governance critical readiness is false
+    // 12. Preflight fails when governance critical readiness is false
     public function test_preflight_fails_when_governance_departments_empty(): void
     {
         SupportDepartment::query()->delete();
@@ -310,7 +310,7 @@ class SupportPhase10CutoverTest extends TestCase
             ->assertExitCode(1);
     }
 
-    // 13. Test 12: Support activation fails when current readiness becomes blocked after draining
+    // 13. Support activation fails when current readiness becomes blocked after draining
     public function test_support_activation_fails_when_readiness_blocked_after_draining(): void
     {
         SupportCutoverManager::enterDraining();
@@ -325,7 +325,7 @@ class SupportPhase10CutoverTest extends TestCase
         $this->assertStringContainsString('Critical readiness checks failed', $result['message']);
     }
 
-    // 14. Test 13: Readiness status is degraded when non-critical warnings exist
+    // 14. Readiness status is degraded when non-critical warnings exist
     public function test_readiness_status_reflects_truthful_state(): void
     {
         $readinessService = new SupportReadinessService();
@@ -337,7 +337,7 @@ class SupportPhase10CutoverTest extends TestCase
         $this->assertIsArray($readiness['warnings']);
     }
 
-    // 15. Test 14: Voice readiness comes from provider capabilities
+    // 15. Voice readiness comes from provider capabilities
     public function test_voice_readiness_comes_from_provider_capabilities(): void
     {
         $readinessService = new SupportReadinessService();
@@ -348,7 +348,7 @@ class SupportPhase10CutoverTest extends TestCase
         $this->assertArrayHasKey('provider', $readiness['voice']);
     }
 
-    // 16. Test 15: Realtime readiness reports configured transport and fallback truthfully
+    // 16. Realtime readiness reports configured transport and fallback truthfully
     public function test_realtime_readiness_reports_transport_and_polling_fallback(): void
     {
         $readinessService = new SupportReadinessService();
@@ -359,7 +359,7 @@ class SupportPhase10CutoverTest extends TestCase
         $this->assertTrue($readiness['realtime']['polling_fallback']);
     }
 
-    // 17. Test 16 & 17: Legacy lock response is sanitized (no cutover_state, no /api/v1/support/*)
+    // 17. Legacy lock response is sanitized (no cutover_state, no /api/v1/support/*)
     public function test_legacy_lock_response_is_strictly_sanitized(): void
     {
         SupportCutoverManager::enterDraining();
@@ -528,5 +528,234 @@ class SupportPhase10CutoverTest extends TestCase
         $this->artisan('support:cutover', ['--rollback' => true])
             ->assertExitCode(0);
         $this->assertEquals(SupportCutoverManager::STATE_LEGACY, SupportCutoverManager::getState());
+    }
+
+    // ==========================================
+    // HARDENING GATES TESTS (Points 1–20)
+    // ==========================================
+
+    // 25. enterDraining fails when AI readiness is blocked
+    public function test_enter_draining_fails_when_ai_readiness_is_blocked(): void
+    {
+        putenv('OPENROUTER_API_KEY=');
+        putenv('GEMINI_API_KEY=');
+
+        $result = SupportCutoverManager::enterDraining();
+
+        $this->assertFalse($result['success']);
+        $this->assertEquals(SupportCutoverManager::STATE_LEGACY, $result['state']);
+        $this->assertStringContainsString('Critical Support readiness checks failed', $result['message']);
+        $this->assertNotEmpty($result['blockers']);
+    }
+
+    // 26. failed enterDraining leaves state = legacy
+    public function test_failed_enter_draining_leaves_state_legacy(): void
+    {
+        putenv('OPENROUTER_API_KEY=');
+        putenv('GEMINI_API_KEY=');
+
+        SupportCutoverManager::enterDraining();
+
+        $this->assertEquals(SupportCutoverManager::STATE_LEGACY, SupportCutoverManager::getState());
+        $this->assertTrue(SupportCutoverManager::isLegacy());
+        $this->assertFalse(SupportCutoverManager::isDraining());
+    }
+
+    // 27. failed enterDraining leaves legacy writes enabled
+    public function test_failed_enter_draining_leaves_legacy_writes_enabled(): void
+    {
+        putenv('OPENROUTER_API_KEY=');
+        putenv('GEMINI_API_KEY=');
+
+        SupportCutoverManager::enterDraining();
+
+        $this->assertTrue(SupportCutoverManager::canMutateLegacy());
+
+        // Legacy endpoint remains callable without 423
+        $response = $this->postJson('/api/chat/send', [
+            'message' => 'Testing legacy during failed drain attempt',
+        ]);
+        $this->assertNotEquals(423, $response->status());
+    }
+
+    // 28. enterDraining fails when governance readiness is blocked
+    public function test_enter_draining_fails_when_governance_readiness_blocked(): void
+    {
+        SupportDepartment::query()->delete();
+
+        $result = SupportCutoverManager::enterDraining();
+
+        $this->assertFalse($result['success']);
+        $this->assertEquals(SupportCutoverManager::STATE_LEGACY, SupportCutoverManager::getState());
+        $this->assertTrue(SupportCutoverManager::canMutateLegacy());
+        $this->assertStringContainsString('No active support departments found', $result['blockers'][0]);
+    }
+
+    // 29. enterDraining fails when required Support schema is blocked
+    public function test_enter_draining_fails_when_required_schema_blocked(): void
+    {
+        Schema::dropIfExists('support_policies');
+
+        $result = SupportCutoverManager::enterDraining();
+
+        $this->assertFalse($result['success']);
+        $this->assertEquals(SupportCutoverManager::STATE_LEGACY, SupportCutoverManager::getState());
+        $this->assertTrue(SupportCutoverManager::canMutateLegacy());
+        $this->assertStringContainsString('Missing required support table: support_policies', $result['blockers'][0]);
+    }
+
+    // 30. command --enter-draining does not lock legacy when dry-run or readiness fails
+    public function test_command_enter_draining_does_not_lock_legacy_when_readiness_fails(): void
+    {
+        putenv('OPENROUTER_API_KEY=');
+        putenv('GEMINI_API_KEY=');
+
+        $this->artisan('support:cutover', ['--enter-draining' => true])
+            ->assertExitCode(1);
+
+        $this->assertEquals(SupportCutoverManager::STATE_LEGACY, SupportCutoverManager::getState());
+        $this->assertTrue(SupportCutoverManager::canMutateLegacy());
+    }
+
+    // 31. selected Gemini with no Gemini credential is blocked even if OpenRouter credential exists
+    public function test_selected_gemini_without_gemini_credential_is_blocked_even_if_openrouter_key_exists(): void
+    {
+        Settings::group('site')->set('site_default_ai_agent', $this->geminiAgent->id);
+        putenv('OPENROUTER_API_KEY=sk_valid_openrouter_test_key');
+        putenv('GEMINI_API_KEY=');
+
+        $readinessService = new SupportReadinessService();
+        $readiness = $readinessService->getReadiness();
+
+        $this->assertFalse($readiness['ready']);
+        $this->assertEquals('blocked', $readiness['status']);
+        $this->assertStringContainsString("Active AI provider 'gemini' is not configured with valid credentials", $readiness['blockers'][0]);
+    }
+
+    // 32. selected OpenRouter with no OpenRouter credential is blocked even if Gemini credential exists
+    public function test_selected_openrouter_without_openrouter_credential_is_blocked_even_if_gemini_key_exists(): void
+    {
+        Settings::group('site')->set('site_default_ai_agent', $this->openRouterAgent->id);
+        putenv('GEMINI_API_KEY=valid_gemini_test_key');
+        putenv('OPENROUTER_API_KEY=');
+
+        $readinessService = new SupportReadinessService();
+        $readiness = $readinessService->getReadiness();
+
+        $this->assertFalse($readiness['ready']);
+        $this->assertEquals('blocked', $readiness['status']);
+        $this->assertStringContainsString("Active AI provider 'openrouter' is not configured with valid credentials", $readiness['blockers'][0]);
+    }
+
+    // 33. selected provider with valid database gateway credential passes
+    public function test_selected_provider_with_valid_database_gateway_credential_passes(): void
+    {
+        Settings::group('site')->set('site_default_ai_agent', $this->openRouterAgent->id);
+        putenv('OPENROUTER_API_KEY=');
+
+        GatewayOption::create([
+            'model_id' => $this->openRouterAgent->id,
+            'model_type' => AiAgent::class,
+            'option' => 'openrouter_api_key',
+            'value' => 'sk-or-v1-database-stored-key',
+            'type' => 1,
+            'activities' => 'openrouter',
+        ]);
+
+        $readinessService = new SupportReadinessService();
+        $readiness = $readinessService->getReadiness();
+
+        $this->assertTrue($readiness['ai_readiness']['provider_configured']);
+        $this->assertEquals('openrouter', $readiness['ai_readiness']['provider']);
+        $this->assertTrue($readiness['ai_readiness']['configured']);
+    }
+
+    // 34. selected provider with valid supported environment credential passes
+    public function test_selected_provider_with_valid_environment_credential_passes(): void
+    {
+        Settings::group('site')->set('site_default_ai_agent', $this->openRouterAgent->id);
+        putenv('OPENROUTER_API_KEY=sk-env-valid-key');
+
+        $readinessService = new SupportReadinessService();
+        $readiness = $readinessService->getReadiness();
+
+        $this->assertTrue($readiness['ai_readiness']['provider_configured']);
+        $this->assertEquals('openrouter', $readiness['ai_readiness']['provider']);
+        $this->assertTrue($readiness['ai_readiness']['configured']);
+    }
+
+    // 35. readiness uses AiProviderFactory runtime resolution
+    public function test_readiness_uses_ai_provider_factory_runtime_resolution(): void
+    {
+        Settings::group('site')->set('site_default_ai_agent', $this->geminiAgent->id);
+
+        $factoryProvider = AiProviderFactory::make();
+        $this->assertEquals('gemini', $factoryProvider->providerName());
+
+        $readinessService = new SupportReadinessService();
+        $readiness = $readinessService->getReadiness();
+
+        $this->assertEquals('gemini', $readiness['ai_readiness']['provider']);
+    }
+
+    // 36. provider readiness response contains no credentials
+    public function test_provider_readiness_response_contains_no_credentials(): void
+    {
+        putenv('OPENROUTER_API_KEY=sk_secret_token_12345');
+        putenv('GEMINI_API_KEY=gemini_secret_token_67890');
+
+        $readinessService = new SupportReadinessService();
+        $readiness = $readinessService->getReadiness();
+
+        $encoded = json_encode($readiness);
+
+        $this->assertStringNotContainsString('sk_secret_token_12345', $encoded);
+        $this->assertStringNotContainsString('gemini_secret_token_67890', $encoded);
+        $this->assertArrayNotHasKey('api_key', $readiness['ai_readiness']);
+        $this->assertArrayNotHasKey('secret', $readiness['ai_readiness']);
+        $this->assertArrayNotHasKey('authorization', $readiness['ai_readiness']);
+    }
+
+    // 37. activation performs final readiness check after migration verification
+    public function test_activation_performs_final_readiness_check_after_migration_verification(): void
+    {
+        SupportCutoverManager::enterDraining();
+
+        // Simulate an outage right before activation
+        putenv('OPENROUTER_API_KEY=');
+        putenv('GEMINI_API_KEY=');
+
+        $result = SupportCutoverManager::activateSupport();
+
+        $this->assertFalse($result['success']);
+        $this->assertEquals(SupportCutoverManager::STATE_DRAINING, SupportCutoverManager::getState());
+        $this->assertStringContainsString('Critical readiness checks failed', $result['message']);
+    }
+
+    // 38. safe rollback resets active cutover metadata correctly
+    public function test_safe_rollback_resets_active_cutover_metadata_correctly(): void
+    {
+        SupportCutoverManager::enterDraining($this->admin->id);
+        SupportCutoverManager::activateSupport($this->admin->id);
+
+        $activeStatus = SupportCutoverManager::getStatus();
+        $this->assertEquals(SupportCutoverManager::STATE_SUPPORT, $activeStatus['state']);
+        $this->assertTrue($activeStatus['is_support_canonical']);
+        $this->assertNotNull($activeStatus['metadata']['support_activated_at']);
+        $this->assertTrue($activeStatus['metadata']['verification_passed']);
+
+        // Safe rollback
+        $rollback = SupportCutoverManager::rollback($this->admin->id);
+        $this->assertTrue($rollback['success']);
+
+        $postStatus = SupportCutoverManager::getStatus();
+        $this->assertEquals(SupportCutoverManager::STATE_LEGACY, $postStatus['state']);
+        $this->assertFalse($postStatus['is_support_canonical']);
+        $this->assertFalse($postStatus['legacy_writes_blocked']);
+        $this->assertNull($postStatus['metadata']['support_activated_at']);
+        $this->assertNull($postStatus['metadata']['cutover_started_at']);
+        $this->assertNull($postStatus['metadata']['activated_by']);
+        $this->assertNull($postStatus['metadata']['final_delta_migration_run_id']);
+        $this->assertFalse($postStatus['metadata']['verification_passed']);
     }
 }

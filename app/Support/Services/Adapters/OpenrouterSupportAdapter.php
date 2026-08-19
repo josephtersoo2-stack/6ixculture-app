@@ -146,4 +146,14 @@ class OpenrouterSupportAdapter implements AiProviderInterface
     {
         return false;
     }
+
+    public function isConfigured(): bool
+    {
+        return !empty($this->apiKey);
+    }
+
+    public function providerName(): string
+    {
+        return 'openrouter';
+    }
 }

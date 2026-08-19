@@ -1,10 +1,10 @@
 # 6ixCulture Enterprise AI Support — Production Cutover Runbook
 
-**Document Version:** 2.0.0 (Safety Hardened)  
+**Document Version:** 2.1.0 (Final Cutover Readiness Hardened)  
 **Phase:** Phase 10 — Production Cutover  
 **Target Environment:** Production / Staging  
 **Service:** 6ixCulture AI Customer Support Domain  
-**Baseline Commit:** `442e49b`  
+**Baseline Commit:** `62a6ffa`  
 
 ---
 
@@ -18,17 +18,26 @@ This runbook provides deterministic, step-by-step procedures for transitioning t
    - Direct backward transition `support` $\to$ `draining` is **strictly forbidden and fails closed**.
    - Direct activation `legacy` $\to$ `support` is **strictly rejected** (system must enter draining first).
    - Idempotent transitions (`legacy` $\to$ `legacy`, `draining` $\to$ `draining`, `support` $\to$ `support`) are safely handled.
-2. **Single Canonical Write Path**: At no point do legacy tables (`chat_conversations`, `chat_messages`) and modern Support tables accept dual writes.
-3. **Server-Authoritative State**: Cutover state is persisted in database settings (`Settings::group('support')->get('cutover_state')`).
-4. **Sanitized Legacy Route Gating**: In `draining` and `support` states, legacy chat mutation endpoints return HTTP 423 (Locked) with generic customer-safe messaging, exposing zero internal paths, namespaces, or cutover state tokens.
-5. **Real Preflight & Activation Readiness Gates**:
-   - `support:cutover --preflight` evaluates critical gates (tables, AI provider, governance seeding) and exits with `FAILURE` (code 1) if blockers exist.
-   - `support:cutover --activate-support` re-evaluates readiness immediately before persisting state and aborts if critical gates fail.
-6. **Unbypassable Rollback Guard (Fail-Closed)**:
+2. **Readiness-Gated Draining (`enterDraining`)**:
+   - `SupportCutoverManager::enterDraining()` evaluates live Support readiness before modifying state.
+   - If critical gates fail, the transition is **rejected**, state remains `legacy`, legacy mutations remain enabled, and the failure is audited.
+   - The CLI `--enter-draining` command also runs a migration dry-run check prior to requesting state change.
+3. **Selected AI Provider Validation (Zero Cross-Provider Leakage)**:
+   - AI readiness uses `AiProviderFactory::make()` and checks `isConfigured()` directly on the resolved runtime adapter (`OpenrouterSupportAdapter`, `GeminiSupportAdapter`).
+   - Cross-provider false positives are completely eliminated: credentials for Provider A do not satisfy readiness if Provider B is selected.
+   - Zero credentials, secrets, or headers are exposed in readiness reports.
+4. **Single Canonical Write Path**: At no point do legacy tables (`chat_conversations`, `chat_messages`) and modern Support tables accept dual writes.
+5. **Server-Authoritative State**: Cutover state is persisted in database settings (`Settings::group('support')->get('cutover_state')`).
+6. **Sanitized Legacy Route Gating**: In `draining` and `support` states, legacy chat mutation endpoints return HTTP 423 (Locked) with generic customer-safe messaging, exposing zero internal paths, namespaces, or cutover state tokens.
+7. **Two-Stage Activation Readiness Gating**:
+   - `activateSupport()` evaluates live critical readiness **before** executing the final delta migration.
+   - `activateSupport()` re-evaluates live critical readiness a second time **after** migration verification and immediately **before** persisting `cutover_state = support`.
+   - If readiness fails at either stage, activation aborts, state remains `draining`, and verification data is preserved.
+8. **Unbypassable Rollback Guard & Clean Metadata Reset**:
    - Evaluates all post-activation domain activity: conversations, messages, tickets, voice sessions, agent assignments, feedback, and operational audit events.
    - Rollback **strictly fails closed** if post-cutover activity occurred.
-   - Command-line flags cannot bypass post-cutover data protection.
-7. **Preservation of Legacy Assets**: Legacy code, models, tables, and routes remain completely preserved for read fallback until Phase 11 verified cleanup.
+   - Upon safe rollback, active cutover metadata (`support_activated_at`, `cutover_started_at`, `activated_by`, `final_delta_migration_run_id`, `verification_passed`) is completely cleared.
+9. **Preservation of Legacy Assets**: Legacy code, models, tables, and routes remain completely preserved for read fallback until Phase 11 verified cleanup.
 
 ---
 
@@ -68,10 +77,12 @@ php artisan support:cutover --preflight
 graph TD
     A[Step 1: Check Preflight Gate] -->|Passes Critical Gates| B[Step 2: Enter Draining Mode]
     A -->|Fails Critical Gate| A1[Abort Cutover: Resolve Blockers]
-    B -->|Legacy Mutations Locked| C[Step 3: Activate Support Domain]
-    C -->|Readiness Recheck + Delta Run + Verification Gate| D{Verification & Readiness Passed?}
-    D -->|Yes: 0 Mismatches| E[Support Canonical Mode Active]
-    D -->|No: Blocked| F[Abort & Remain in Draining]
+    B -->|Critical Readiness + Dry-Run PASS| C[Step 3: Activate Support Domain]
+    B -->|Critical Readiness Fails| B1[Abort: State Remains Legacy & Writes Active]
+    C -->|Pre-Delta Readiness PASS| D[Run Final Delta Migration]
+    D -->|Parity Verification PASS| E[Post-Delta Final Readiness Recheck]
+    E -->|Final Readiness PASS| F[Persist State = Support Canonical]
+    E -->|Final Readiness Fails| G[Abort: State Remains Draining]
 ```
 
 ### Step 1: Pre-Flight Verification
@@ -87,10 +98,11 @@ Lock legacy mutation routes to prevent new chat entries or agent replies while p
 php artisan support:cutover --enter-draining
 ```
 *Verification:*
+- Critical readiness and migration dry-run are evaluated.
 - Legacy mutation endpoints (`/api/chat/send`, `/api/frontend/chat/send`, `/api/admin/chat/reply/{id}`, etc.) now return `HTTP 423 Locked`.
 - Legacy historical reads (`/api/chat/history`, `/api/admin/chat`, `/api/admin/chat/show/{id}`) remain operational.
 
-### Step 3: Activate Support Domain (Delta + Verification + Readiness Gate)
+### Step 3: Activate Support Domain (Pre-Readiness + Delta + Verification + Final Readiness Gate)
 Execute the final delta migration, verify full data parity (0 mismatches), recheck live system readiness, and activate `support` state:
 ```bash
 php artisan support:cutover --activate-support
@@ -101,9 +113,10 @@ php artisan support:cutover --activate-support
 3. Runs `LegacyChatMigrationService::migrate(['apply' => true])` for any final delta messages.
 4. Runs `LegacyChatAuditService::verifyParity()`.
 5. Verifies `mismatch_count === 0`.
-6. Updates persistent state `cutover_state = 'support'`.
-7. Records timestamp `support_activated_at`.
-8. Generates structured audit log `support_cutover_activated`.
+6. Rechecks live system readiness a second time immediately before state persistence.
+7. Updates persistent state `cutover_state = 'support'`.
+8. Records timestamp `support_activated_at`.
+9. Generates structured audit log `support_cutover_activated`.
 
 ### Step 4: Post-Cutover Status Check
 Verify the cutover state:
@@ -135,7 +148,7 @@ php artisan support:cutover --status
 
 ### 5.1 Guarded Rollback Criteria
 Rollback from `support` back to `legacy` is strictly controlled:
-- **Clean Rollback**: If zero domain records or operational events have occurred since `support_activated_at`, rollback succeeds automatically.
+- **Clean Rollback**: If zero domain records or operational events have occurred since `support_activated_at`, rollback succeeds automatically and clears all active cutover metadata.
 - **Guarded Block (Fail-Closed)**: If any of the following exist post-activation, rollback **strictly fails closed**:
   - `SupportConversation`
   - `SupportMessage`
@@ -158,15 +171,3 @@ Rollback Blockers (Fail-Closed Data Protection):
   • 5 Support messages created post-cutover.
   • 1 Support tickets created post-cutover.
 ```
-
----
-
-## 6. Real-Time Health & Incident Monitoring
-
-| Metric | Target | Health Indicator |
-|---|---|---|
-| Support API Latency (`/api/v1/support/*`) | < 500ms p95 | Normal |
-| AI Provider Availability | Configured | Normal |
-| Realtime Webhook / Echo Events | Active / Polling fallback | Normal |
-| Legacy Mutation Attempts | Draining to 0 | Expected |
-| Support Audit Logs | Streaming | Expected |

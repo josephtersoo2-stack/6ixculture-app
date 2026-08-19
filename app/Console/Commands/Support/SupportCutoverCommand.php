@@ -174,7 +174,20 @@ class SupportCutoverCommand extends Command
 
     private function handleEnterDraining(): int
     {
-        $this->info("Entering Draining Mode (locking legacy mutation routes)...");
+        $this->info("Evaluating Readiness & Migration Dry-Run Before Entering Draining Mode...");
+
+        // 1. Audit & Migration Dry-Run Check
+        $migrationService = new LegacyChatMigrationService();
+        $dryRun = $migrationService->migrate([
+            'apply' => false,
+            'chunk' => (int) $this->option('chunk'),
+            'migrate_config' => true,
+        ]);
+
+        if ($dryRun['status'] === 'failed') {
+            $this->error("Migration dry-run failed. Cannot enter draining mode.");
+            return Command::FAILURE;
+        }
 
         $result = SupportCutoverManager::enterDraining();
 
@@ -184,6 +197,12 @@ class SupportCutoverCommand extends Command
         }
 
         $this->error($result['message']);
+        if (!empty($result['blockers'])) {
+            $this->error("\nCritical Readiness Blockers:");
+            foreach ($result['blockers'] as $blocker) {
+                $this->line("  ✖ {$blocker}");
+            }
+        }
         return Command::FAILURE;
     }
 

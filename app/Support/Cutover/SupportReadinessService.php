@@ -7,6 +7,7 @@ use App\Support\Models\SupportAITool;
 use App\Support\Models\SupportDepartment;
 use App\Support\Models\SupportKnowledgeArticle;
 use App\Support\Models\SupportPolicy;
+use App\Support\Services\AiProviderFactory;
 use App\Support\Services\Voice\VoiceCapabilityService;
 use Dipokhalder\Settings\Facades\Settings;
 use Illuminate\Support\Facades\Schema;
@@ -58,28 +59,13 @@ class SupportReadinessService
             }
         }
 
-        // 2. AI Provider Configuration (Critical Gate)
-        $defaultAgentId = null;
-        $defaultAgentSlug = null;
-        $hasActiveAgentRecord = false;
-        try {
-            $defaultAgentId = (int) Settings::group('site')->get('site_default_ai_agent');
-            if ($defaultAgentId > 0) {
-                $agent = AiAgent::find($defaultAgentId);
-                if ($agent && (int) $agent->status === 5) {
-                    $defaultAgentSlug = $agent->slug;
-                    $hasActiveAgentRecord = true;
-                }
-            }
-        } catch (\Throwable $e) {
-            // Ignore in unmigrated environments
-        }
-
-        $hasEnvApiKey = !empty(env('OPENROUTER_API_KEY')) || !empty(env('GEMINI_API_KEY')) || !empty(env('OPENAI_API_KEY'));
-        $providerConfigured = $hasActiveAgentRecord || $hasEnvApiKey;
+        // 2. AI Provider Configuration (Critical Gate via Runtime Factory)
+        $aiProvider = AiProviderFactory::make();
+        $providerName = $aiProvider->providerName();
+        $providerConfigured = $aiProvider->isConfigured();
 
         if (!$providerConfigured) {
-            $blockers[] = "No active AI provider configured (site_default_ai_agent or API key missing).";
+            $blockers[] = "Active AI provider '{$providerName}' is not configured with valid credentials.";
         }
 
         // 3. Governance Counts & Readiness (Critical Gate)
@@ -152,8 +138,10 @@ class SupportReadinessService
                 'tables' => $tableStatus,
             ],
             'ai_readiness' => [
+                'provider' => $providerName,
+                'configured' => $providerConfigured,
                 'provider_configured' => $providerConfigured,
-                'default_agent_slug' => $defaultAgentSlug,
+                'default_agent_slug' => $providerName,
             ],
             'governance' => [
                 'ready' => $governanceReady,

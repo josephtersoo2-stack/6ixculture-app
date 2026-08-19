@@ -134,6 +134,31 @@ class SupportCutoverManager
         }
 
         // 3. Normal transition: legacy -> draining
+        // Critical Gate: Verify live Support readiness before locking legacy mutation writes
+        $readinessService = new SupportReadinessService();
+        $readiness = $readinessService->getReadiness();
+
+        if (!$readiness['ready'] || !empty($readiness['blockers'])) {
+            SupportAuditLog::log([
+                'actor_type' => $userId ? 'agent' : 'system',
+                'actor_id' => $userId,
+                'action' => 'support_cutover_draining_blocked',
+                'resource_type' => 'cutover',
+                'resource_id' => null,
+                'metadata' => [
+                    'current_state' => $currentState,
+                    'blockers' => $readiness['blockers'],
+                ],
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Transition to draining mode blocked: Critical Support readiness checks failed.',
+                'blockers' => $readiness['blockers'],
+                'state' => self::STATE_LEGACY,
+            ];
+        }
+
         $auditService = new LegacyChatAuditService();
         $auditReport = $auditService->audit();
 
@@ -202,11 +227,24 @@ class SupportCutoverManager
             ];
         }
 
-        // 3. Re-verify current readiness immediately before activation (Critical Gate)
+        // 3. Re-verify current readiness immediately before activation (Pre-Migration Gate)
         $readinessService = new SupportReadinessService();
         $readiness = $readinessService->getReadiness();
 
         if (!$readiness['ready'] || !empty($readiness['blockers'])) {
+            SupportAuditLog::log([
+                'actor_type' => $userId ? 'agent' : 'system',
+                'actor_id' => $userId,
+                'action' => 'support_cutover_activation_blocked',
+                'resource_type' => 'cutover',
+                'resource_id' => null,
+                'metadata' => [
+                    'current_state' => $currentState,
+                    'phase' => 'pre_migration_readiness',
+                    'blockers' => $readiness['blockers'],
+                ],
+            ]);
+
             return [
                 'success' => false,
                 'message' => 'Support activation blocked: Critical readiness checks failed.',
@@ -246,7 +284,35 @@ class SupportCutoverManager
             ];
         }
 
-        // 6. Activate Support Mode
+        // 6. Re-verify critical readiness after final delta and verification (Post-Migration Final Gate)
+        $finalReadiness = $readinessService->getReadiness();
+        if (!$finalReadiness['ready'] || !empty($finalReadiness['blockers'])) {
+            SupportAuditLog::log([
+                'actor_type' => $userId ? 'agent' : 'system',
+                'actor_id' => $userId,
+                'action' => 'support_cutover_activation_blocked',
+                'resource_type' => 'cutover',
+                'resource_id' => null,
+                'metadata' => [
+                    'current_state' => $currentState,
+                    'phase' => 'post_migration_readiness',
+                    'migration_run_id' => $migrationResult['run_id'],
+                    'verification_passed' => $verificationResult['passed'],
+                    'blockers' => $finalReadiness['blockers'],
+                ],
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Support activation blocked: Final post-migration readiness checks failed.',
+                'blockers' => $finalReadiness['blockers'],
+                'state' => self::STATE_DRAINING,
+                'migration' => $migrationResult,
+                'verification' => $verificationResult,
+            ];
+        }
+
+        // 7. Activate Support Mode
         $activatedAt = Carbon::now()->toIso8601String();
 
         try {
@@ -410,6 +476,9 @@ class SupportCutoverManager
             Settings::group('support')->set('cutover_state', self::STATE_LEGACY);
             Settings::group('support')->set('support_activated_at', null);
             Settings::group('support')->set('cutover_started_at', null);
+            Settings::group('support')->set('activated_by', null);
+            Settings::group('support')->set('final_delta_migration_run_id', null);
+            Settings::group('support')->set('verification_passed', false);
         } catch (\Throwable $e) {
             return [
                 'success' => false,
