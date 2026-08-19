@@ -1,68 +1,73 @@
 # 6ixCulture Enterprise AI Support — Phase 11 Legacy Removal Manifest
 
 **Repository:** `josephtersoo2-stack/6ixculture-app`  
-**Branch:** `main`  
-**Phase:** Phase 11 — Verified Legacy Removal  
-**Baseline Commit:** `4321f34` (`phase10-final-4321f34`)  
-**Status:** AUDITED & GATED (Destructive removal blocked pending production cutover)  
+**Branch:** `phase11-local-cleanup` (Isolated development branch; `main` untouched at `3cf1f2d` for safe cPanel production cutover)  
+**Phase:** Phase 11 — Verified Legacy Removal (Local Implementation)  
+**Baseline Commit:** `3cf1f2d`  
+**Safety Baseline Tag:** `phase10-final-4321f34` (`4321f34c2a404df2914dd974c97f7c79ca5f4d9b`)  
+**Status:** COMPLETED LOCALLY ON FEATURE BRANCH  
 
 ---
 
-## 1. Classification Categories
+## 1. Classification Categories & Lifecycle State
 
-Each identified legacy token or reference across the codebase is categorized into one of five definitive lifecycle states:
+Each identified legacy token or reference across the codebase has been categorized and resolved on the `phase11-local-cleanup` branch:
 
-1. **`REMOVE`**: Obsolete prototype runtime files, controllers, services, routes, components, and settings designated for permanent deletion once the production removal gate passes.
-2. **`REPLACE REFERENCE`**: Files requiring modifications to remove dead imports, navigation links, or router references without deleting the containing file.
-3. **`KEEP FOR MIGRATION/AUDIT`**: Phase 9 migration services, audit commands, data mappers, verification tooling, historical reports, and specifications preserved for auditability and compliance.
-4. **`KEEP FOR DATA RETENTION`**: Database tables (`chat_conversations`, `chat_messages`) and migration schema definitions preserved read-only until explicit table-drop authorization.
+1. **`REMOVED`**: Obsolete prototype runtime files, controllers, services, routes, components, and settings permanently deleted on this branch.
+2. **`REPLACED REFERENCE`**: Files modified to remove dead imports, navigation links, or router references without deleting the containing file.
+3. **`KEEP FOR MIGRATION/AUDIT`**: Phase 9 migration services, audit commands, data mappers, verification tooling, historical reports, and specifications preserved for auditability and compliance. Decoupled from runtime via migration-specific models.
+4. **`KEEP FOR DATA RETENTION`**: Database tables (`chat_conversations`, `chat_messages`) and migration schema definitions preserved read-only until separate explicit table-drop authorization.
 5. **`KEEP — NON-LEGACY AI INFRASTRUCTURE`**: Modern Support domain assets, backend AI copilot, AI agent models, and gateway options used by active application features.
 
 ---
 
 ## 2. Exhaustive Repository Inventory & Removal Matrix
 
-### 2.1 Legacy Backend Runtime Code (Target: `REMOVE` upon Gate Approval)
+### 2.1 Legacy Backend Runtime Code (Status: `REMOVED`)
 
-| Target File | Patterns Matched | Lines / Hits | Purpose | Classification | Action Upon Production Gate Pass |
+| Target File | Patterns Matched | Lines / Hits | Purpose | Classification | Action Taken on `phase11-local-cleanup` |
 |---|---|---|---|---|---|
-| [`app/Http/Controllers/Frontend/ChatController.php`](file:///c:/xampp/htdocs/shopkingcpanel/app/Http/Controllers/Frontend/ChatController.php) | `ChatController`, `ChatService`, `ChatConversation` | 14 hits | Prototype customer chat endpoint controller | `REMOVE` | Delete file after production cutover verification |
-| [`app/Http/Controllers/Admin/AdminChatController.php`](file:///c:/xampp/htdocs/shopkingcpanel/app/Http/Controllers/Admin/AdminChatController.php) | `AdminChatController`, `ChatService`, `ChatConversation`, `ChatMessage` | 16 hits | Prototype back-office admin chat management | `REMOVE` | Delete file after production cutover verification |
-| [`app/Services/ChatService.php`](file:///c:/xampp/htdocs/shopkingcpanel/app/Services/ChatService.php) | `ChatService`, `ChatConversation`, `ChatMessage`, `chat_conversations`, `chat_messages` | 23 hits | Prototype chat business logic and dynamic table creation | `REMOVE` | Delete file after production cutover verification |
-| [`app/Models/ChatConversation.php`](file:///c:/xampp/htdocs/shopkingcpanel/app/Models/ChatConversation.php) | `ChatConversation`, `chat_conversations`, `ChatMessage` | 3 hits | Eloquent model for prototype conversations table | `REMOVE` | Delete model class after production cutover verification |
-| [`app/Models/ChatMessage.php`](file:///c:/xampp/htdocs/shopkingcpanel/app/Models/ChatMessage.php) | `ChatMessage`, `chat_messages`, `ChatConversation` | 3 hits | Eloquent model for prototype messages table | `REMOVE` | Delete model class after production cutover verification |
-| [`app/Http/Middleware/Support/GateLegacyChatMutationMiddleware.php`](file:///c:/xampp/htdocs/shopkingcpanel/app/Http/Middleware/Support/GateLegacyChatMutationMiddleware.php) | `gateLegacyChat` | 4 hits | Cutover safety middleware locking legacy mutation routes | `REMOVE` | Delete middleware & remove alias after routes removed |
+| [`app/Http/Controllers/Frontend/ChatController.php`](file:///c:/xampp/htdocs/shopkingcpanel/app/Http/Controllers/Frontend/ChatController.php) | `ChatController`, `ChatService`, `ChatConversation` | 14 hits | Prototype customer chat endpoint controller | `REMOVED` | File deleted |
+| [`app/Http/Controllers/Admin/AdminChatController.php`](file:///c:/xampp/htdocs/shopkingcpanel/app/Http/Controllers/Admin/AdminChatController.php) | `AdminChatController`, `ChatService`, `ChatConversation`, `ChatMessage` | 16 hits | Prototype back-office admin chat management | `REMOVED` | File deleted |
+| [`app/Services/ChatService.php`](file:///c:/xampp/htdocs/shopkingcpanel/app/Services/ChatService.php) | `ChatService`, `ChatConversation`, `ChatMessage`, `chat_conversations`, `chat_messages` | 23 hits | Prototype chat business logic and dynamic table creation | `REMOVED` | File deleted |
+| [`app/Models/ChatConversation.php`](file:///c:/xampp/htdocs/shopkingcpanel/app/Models/ChatConversation.php) | `ChatConversation`, `chat_conversations`, `ChatMessage` | 3 hits | Eloquent model for prototype conversations table | `REMOVED` | Replaced by `App\Support\Migration\Legacy\Models\LegacyChatConversation.php` for migration layer only |
+| [`app/Models/ChatMessage.php`](file:///c:/xampp/htdocs/shopkingcpanel/app/Models/ChatMessage.php) | `ChatMessage`, `chat_messages`, `ChatConversation` | 3 hits | Eloquent model for prototype messages table | `REMOVED` | Replaced by `App\Support\Migration\Legacy\Models\LegacyChatMessage.php` for migration layer only |
+| [`app/Http/Middleware/Support/GateLegacyChatMutationMiddleware.php`](file:///c:/xampp/htdocs/shopkingcpanel/app/Http/Middleware/Support/GateLegacyChatMutationMiddleware.php) | `gateLegacyChat` | 4 hits | Cutover safety middleware locking legacy mutation routes | `REMOVED` | Deleted middleware & removed alias from `bootstrap/app.php` |
 
 ---
 
-### 2.2 Route Registrations & Endpoints (Target: `REMOVE` upon Gate Approval)
+### 2.2 Route Registrations & Endpoints (Status: `REMOVED`)
 
-| File | Route Prefix / Pattern | Endpoints | Classification | Action Upon Production Gate Pass |
+| File | Route Prefix / Pattern | Endpoints | Classification | Action Taken on `phase11-local-cleanup` |
 |---|---|---|---|---|
-| [`routes/api.php`](file:///c:/xampp/htdocs/shopkingcpanel/routes/api.php#L775-L780) | `api/admin/chat/*` | `GET /`, `GET /show/{id}`, `POST /reply/{id}`, `POST /update-status/{id}`, `DELETE /{id}` | `REMOVE` | Remove route block; canonical remains `api/v1/support/agent/*` |
-| [`routes/api.php`](file:///c:/xampp/htdocs/shopkingcpanel/routes/api.php#L793-L797) | `api/chat/*` (alias) | `ANY /history`, `ANY /send`, `ANY /request-human` | `REMOVE` | Remove route block; canonical remains `api/v1/support/conversations/*` |
-| [`routes/api.php`](file:///c:/xampp/htdocs/shopkingcpanel/routes/api.php#L799-L803) | `api/frontend/chat/*` | `ANY /history`, `ANY /send`, `ANY /request-human` | `REMOVE` | Remove route block; canonical remains `api/v1/support/conversations/*` |
-| [`routes/api.php`](file:///c:/xampp/htdocs/shopkingcpanel/routes/api.php#L962-L966) | `api/chat/*` (frontend) | `GET /history`, `POST /send`, `POST /request-human` | `REMOVE` | Remove route block; canonical remains `api/v1/support/conversations/*` |
+| [`routes/api.php`](file:///c:/xampp/htdocs/shopkingcpanel/routes/api.php) | `api/admin/chat/*` | `GET /`, `GET /show/{id}`, `POST /reply/{id}`, `POST /update-status/{id}`, `DELETE /{id}` | `REMOVED` | Removed route block; canonical is `api/v1/support/agent/*` |
+| [`routes/api.php`](file:///c:/xampp/htdocs/shopkingcpanel/routes/api.php) | `api/chat/*` (alias) | `ANY /history`, `ANY /send`, `ANY /request-human` | `REMOVED` | Removed route block; canonical is `api/v1/support/conversations/*` |
+| [`routes/api.php`](file:///c:/xampp/htdocs/shopkingcpanel/routes/api.php) | `api/frontend/chat/*` | `ANY /history`, `ANY /send`, `ANY /request-human` | `REMOVED` | Removed route block; canonical is `api/v1/support/conversations/*` |
+| [`routes/api.php`](file:///c:/xampp/htdocs/shopkingcpanel/routes/api.php) | `api/chat/*` (frontend) | `GET /history`, `POST /send`, `POST /request-human` | `REMOVED` | Removed route block; canonical is `api/v1/support/conversations/*` |
+
+*Note: Total registered routes cleanly reduced from 581 to 565 routes.*
 
 ---
 
-### 2.3 Legacy Frontend Assets & Router (Target: `REMOVE` / `REPLACE REFERENCE`)
+### 2.3 Legacy Frontend Assets & Router (Status: `CONFIRMED CLEAN`)
 
 | File | Item | Classification | Current State |
 |---|---|---|---|
-| `resources/js/components/frontend/chat/LiveChatWidgetComponent.vue` | Obsolete frontend live-chat widget | `REMOVE` | Already removed / replaced by `AiSupportWidget.vue` |
-| `resources/js/components/admin/chat/LiveChatComponent.vue` | Obsolete admin live-chat panel | `REMOVE` | Already removed / replaced by `SupportCenterComponent.vue` |
-| `resources/js/router/modules/liveChatRoutes.js` | Obsolete router module | `REMOVE` | Already removed / replaced by `supportRoutes.js` |
-| `resources/js/router/index.js` | Router bundle index | `REPLACE REFERENCE` | Clean (0 references to `liveChatRoutes`) |
+| `resources/js/components/frontend/chat/LiveChatWidgetComponent.vue` | Obsolete frontend live-chat widget | `REMOVED` | Replaced by `AiSupportWidget.vue` |
+| `resources/js/components/admin/chat/LiveChatComponent.vue` | Obsolete admin live-chat panel | `REMOVED` | Replaced by `SupportCenterComponent.vue` |
+| `resources/js/router/modules/liveChatRoutes.js` | Obsolete router module | `REMOVED` | Replaced by `supportRoutes.js` |
+| `resources/js/router/index.js` | Router bundle index | `REPLACED REFERENCE` | Clean (0 references to `liveChatRoutes`) |
 
 ---
 
-### 2.4 Phase 9 Migration Ledger & Evidence (Target: `KEEP FOR MIGRATION/AUDIT`)
+### 2.4 Phase 9 Migration Ledger & Evidence (Status: `KEEP FOR MIGRATION/AUDIT`)
 
-| Target File / Table | Purpose | Classification | Retention Rationale |
+| Target File / Table | Purpose | Classification | Retention & Migration-Model Integration |
 |---|---|---|---|
 | `support_legacy_migration_runs` | Migration run records and batch logs | `KEEP FOR MIGRATION/AUDIT` | Immutable audit ledger of legacy data ingestion |
 | `support_legacy_migration_items` | Entity mapping pointers (legacy ID $\to$ support ID) | `KEEP FOR MIGRATION/AUDIT` | Entity provenance and historical correlation |
+| [`app/Support/Migration/Legacy/Models/LegacyChatConversation.php`](file:///c:/xampp/htdocs/shopkingcpanel/app/Support/Migration/Legacy/Models/LegacyChatConversation.php) | Migration-only representation of `chat_conversations` | `KEEP FOR MIGRATION/AUDIT` | Enables migration tooling to operate without runtime models |
+| [`app/Support/Migration/Legacy/Models/LegacyChatMessage.php`](file:///c:/xampp/htdocs/shopkingcpanel/app/Support/Migration/Legacy/Models/LegacyChatMessage.php) | Migration-only representation of `chat_messages` | `KEEP FOR MIGRATION/AUDIT` | Enables migration tooling to operate without runtime models |
 | [`app/Support/Migration/LegacyChatMigrationService.php`](file:///c:/xampp/htdocs/shopkingcpanel/app/Support/Migration/LegacyChatMigrationService.php) | Delta migration engine | `KEEP FOR MIGRATION/AUDIT` | Retained for delta synchronization and verification |
 | [`app/Support/Migration/LegacyChatAuditService.php`](file:///c:/xampp/htdocs/shopkingcpanel/app/Support/Migration/LegacyChatAuditService.php) | Pre-cutover and post-cutover parity auditor | `KEEP FOR MIGRATION/AUDIT` | Verification of historical record integrity |
 | [`app/Support/Migration/LegacyMigrationVerificationService.php`](file:///c:/xampp/htdocs/shopkingcpanel/app/Support/Migration/LegacyMigrationVerificationService.php) | Parity verifier | `KEEP FOR MIGRATION/AUDIT` | Checksum and parity verification |
@@ -75,16 +80,16 @@ Each identified legacy token or reference across the codebase is categorized int
 
 ---
 
-### 2.5 Legacy Data Tables (Target: `KEEP FOR DATA RETENTION`)
+### 2.5 Legacy Data Tables (Status: `KEEP FOR DATA RETENTION`)
 
 | Table Name | Schema Migration | Classification | Decision & Policy |
 |---|---|---|---|
-| `chat_conversations` | `database/migrations/2026_08_13_000001_create_live_chats_table.php` | `KEEP FOR DATA RETENTION` | Preserved read-only in production database until explicit table-drop authorization |
-| `chat_messages` | `database/migrations/2026_08_13_000001_create_live_chats_table.php` | `KEEP FOR DATA RETENTION` | Preserved read-only in production database until explicit table-drop authorization |
+| `chat_conversations` | `database/migrations/2026_08_13_000001_create_live_chats_table.php` | `KEEP FOR DATA RETENTION` | Preserved read-only in database; NO drop migration executed |
+| `chat_messages` | `database/migrations/2026_08_13_000001_create_live_chats_table.php` | `KEEP FOR DATA RETENTION` | Preserved read-only in database; NO drop migration executed |
 
 ---
 
-### 2.6 Retained AI & Support Core Infrastructure (Target: `KEEP — NON-LEGACY AI INFRASTRUCTURE`)
+### 2.6 Retained AI & Support Core Infrastructure (Status: `KEEP — NON-LEGACY AI INFRASTRUCTURE`)
 
 | Component / Subsystem | Files / Symbols | Classification | Functional Role |
 |---|---|---|---|
@@ -95,3 +100,4 @@ Each identified legacy token or reference across the codebase is categorized int
 | Support Domain Runtime | `app/Support/**` (Models, Services, Controllers, Policies, Tools, Voice, Knowledge) | `KEEP — NON-LEGACY AI INFRASTRUCTURE` | Modern enterprise AI Support domain |
 | Admin AI Sidebar UI | `resources/js/components/layouts/backend/BackendAiSidebarComponent.vue` | `KEEP — NON-LEGACY AI INFRASTRUCTURE` | Back-office copilot Vue component |
 | Vuex AI Store | `resources/js/store/modules/ai.js` | `KEEP — NON-LEGACY AI INFRASTRUCTURE` | AI provider & chat state store |
+

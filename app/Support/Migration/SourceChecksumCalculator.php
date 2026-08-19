@@ -2,8 +2,8 @@
 
 namespace App\Support\Migration;
 
-use App\Models\ChatConversation;
-use App\Models\ChatMessage;
+use App\Support\Migration\Legacy\Models\LegacyChatConversation as ChatConversation;
+use App\Support\Migration\Legacy\Models\LegacyChatMessage as ChatMessage;
 
 class SourceChecksumCalculator
 {

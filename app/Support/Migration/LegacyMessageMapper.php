@@ -2,8 +2,8 @@
 
 namespace App\Support\Migration;
 
-use App\Models\ChatMessage;
 use App\Models\User;
+use App\Support\Migration\Legacy\Models\LegacyChatMessage as ChatMessage;
 use App\Support\Enums\MessageType;
 use App\Support\Enums\SenderType;
 

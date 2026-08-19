@@ -1,16 +1,14 @@
 <?php
 
-namespace App\Models;
+namespace App\Support\Migration\Legacy\Models;
 
-use Illuminate\Database\Eloquent\Factories\HasFactory;
+use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
-class ChatConversation extends Model
+class LegacyChatConversation extends Model
 {
-    use HasFactory;
-
     protected $table = 'chat_conversations';
 
     protected $fillable = [
@@ -30,7 +28,7 @@ class ChatConversation extends Model
 
     public function messages(): HasMany
     {
-        return $this->hasMany(ChatMessage::class, 'conversation_id')->orderBy('id', 'asc');
+        return $this->hasMany(LegacyChatMessage::class, 'conversation_id')->orderBy('id', 'asc');
     }
 
     public function user(): BelongsTo

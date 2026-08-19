@@ -2,8 +2,8 @@
 
 namespace Tests\Feature\Support;
 
-use App\Models\ChatConversation;
-use App\Models\ChatMessage;
+use App\Support\Migration\Legacy\Models\LegacyChatConversation as ChatConversation;
+use App\Support\Migration\Legacy\Models\LegacyChatMessage as ChatMessage;
 use App\Models\User;
 use App\Models\AiAgent;
 use App\Support\Enums\ConversationMode;
@@ -568,11 +568,8 @@ class SupportPhase9LegacyMigrationTest extends TestCase
 
     public function test_legacy_classes_and_tables_remain_present_and_coexistent(): void
     {
-        $this->assertTrue(class_exists(\App\Http\Controllers\Frontend\ChatController::class));
-        $this->assertTrue(class_exists(\App\Http\Controllers\Admin\AdminChatController::class));
-        $this->assertTrue(class_exists(\App\Services\ChatService::class));
-        $this->assertTrue(class_exists(\App\Models\ChatConversation::class));
-        $this->assertTrue(class_exists(\App\Models\ChatMessage::class));
+        $this->assertTrue(class_exists(\App\Support\Migration\Legacy\Models\LegacyChatConversation::class));
+        $this->assertTrue(class_exists(\App\Support\Migration\Legacy\Models\LegacyChatMessage::class));
 
         $this->assertTrue(\Illuminate\Support\Facades\Schema::hasTable('chat_conversations'));
         $this->assertTrue(\Illuminate\Support\Facades\Schema::hasTable('chat_messages'));

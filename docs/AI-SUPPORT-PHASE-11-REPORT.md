@@ -1,89 +1,85 @@
-# 6ixCulture Enterprise AI Support — Phase 11 Removal Audit Report
+# 6ixCulture Enterprise AI Support — Phase 11 Removal Report
 
 **Repository:** `josephtersoo2-stack/6ixculture-app`  
-**Branch:** `main`  
-**Phase:** Phase 11 — Verified Legacy Removal (Audit & Gated Evaluation)  
-**Baseline Commit:** `4321f34`  
+**Branch:** `phase11-local-cleanup` (Isolated development branch; `main` untouched at `3cf1f2d` for safe cPanel production cutover)  
+**Phase:** Phase 11 — Verified Legacy Removal (Local Implementation)  
+**Baseline Commit:** `3cf1f2d`  
 **Safety Baseline Tag:** `phase10-final-4321f34` (`4321f34c2a404df2914dd974c97f7c79ca5f4d9b`)  
 **Execution Timestamp:** 2026-08-19  
 
 ---
 
-## 1. Executive Summary & Hard Gate Evaluation
+## 1. Executive Summary & Implementation Overview
 
-Phase 11 governs the permanent, irreversible decommissioning and removal of obsolete legacy chat prototype code, models, controllers, services, routes, and Vue components. In accordance with strict enterprise safety specifications, **destructive execution is self-gating** and contingent upon verified production cutover.
+Phase 11 implements the complete local decommissioning and removal of obsolete legacy chat prototype code, models, controllers, services, routes, and middleware while preserving shared AI infrastructure and migration parity.
 
-### Hard Production Removal Gate Evaluation
+To ensure production cutover safety on cPanel, **Phase 11 local cleanup is implemented and tested on an isolated feature branch (`phase11-local-cleanup`) without touching the production-ready cutover fallback on `main` (`3cf1f2d`)**.
 
-| Verification Condition | Target Requirement | Current State | Status |
+### Implementation Status Matrix
+
+| Component / Subsystem | Target Action | Implementation on `phase11-local-cleanup` | Status |
 |---|---|---|---|
-| Cutover State | `cutover_state = support` | `legacy` | **NOT MET** |
-| Verification Status | `verification_passed = true` | `NO` | **NOT MET** |
-| Support Activation Timestamp | `support_activated_at` present | `null` | **NOT MET** |
-| Migration Generation ID | `final_delta_migration_run_id` present | `null` | **NOT MET** |
-| Support Live Readiness | `ready = true` / 0 blockers | `READY` (DEGRADED) | **MET** |
-| Production Cutover Execution | Executed in production environment | `NOT EXECUTED` | **NOT MET** |
-| Production Smoke Tests | All smoke tests passing | Pending Cutover | **NOT MET** |
-| Critical Unresolved Incidents | Zero open incidents | None | **MET** |
-
-### Decision & Gate Status
-```
-PRODUCTION CUTOVER GATE: BLOCKED / NOT MET
-DESTRUCTIVE REMOVAL EXECUTED: NO
-LEGACY ASSETS DELETED: NONE
-PHASE 11 AUDIT & MANIFEST: COMPLETE
-```
-
-Because production cutover has not been executed in this environment, **destructive removal was intentionally NOT executed**. All legacy runtime code, models, services, tables, and routes remain 100% preserved and functional.
+| Legacy Frontend Controller (`ChatController.php`) | Permanent Removal | File deleted | **REMOVED** |
+| Legacy Admin Controller (`AdminChatController.php`) | Permanent Removal | File deleted | **REMOVED** |
+| Legacy Chat Service (`ChatService.php`) | Permanent Removal | File deleted | **REMOVED** |
+| Legacy Runtime Models (`ChatConversation.php`, `ChatMessage.php`) | Decoupled Removal | Removed from `App\Models\`; replaced by migration-only models | **DECOUPLED & REMOVED** |
+| Migration Models (`App\Support\Migration\Legacy\Models\*`) | Migration Preservation | Created `LegacyChatConversation` & `LegacyChatMessage` | **ACTIVE** |
+| Cutover Middleware (`GateLegacyChatMutationMiddleware.php`) | Permanent Removal | Deleted class & removed alias from `bootstrap/app.php` | **REMOVED** |
+| Legacy Route Blocks (`api/chat/*`, `api/frontend/chat/*`, `api/admin/chat/*`) | Route Table Cleanup | Removed from `routes/api.php`; 565 routes remaining | **CLEANED** |
+| Obsolete Settings Code (`chatSettings`, `saveChatSettings`) | Method Cleanup | Removed from `AiAgentController.php` | **CLEANED** |
+| Database Tables (`chat_conversations`, `chat_messages`) | Data Retention | Preserved read-only in database; NO drop migrations | **PRESERVED** |
+| Phase 9 Migration Tooling & Ledgers | Migration Auditability | Preserved & verified against migration models | **PRESERVED & FUNCTIONAL** |
+| Shared AI Infrastructure (`AiController`, `AiAgent`, `GatewayOption`, etc.) | Domain Integrity | 100% active and functional | **PRESERVED & FUNCTIONAL** |
+| Support Domain (`app/Support/**`) | Modern Domain | 100% active and canonical | **ACTIVE** |
 
 ---
 
-## 2. Safety Baseline Preservation
+## 2. Safety Architecture: Decoupled Migration Models
 
-The immutable baseline SHA for Phase 10 final hardening has been permanently recorded and tagged:
-- **Baseline Commit:** `4321f34c2a404df2914dd974c97f7c79ca5f4d9b`
-- **Git Tag:** `phase10-final-4321f34` (pushed to `origin`)
-
----
-
-## 3. Inventory & Removal Readiness Manifest Summary
-
-An exhaustive repository search across all PHP files, Vue components, routers, stores, configuration files, database migrations, tests, and documentation was conducted. Detailed line-by-line classifications are recorded in [`docs/AI-SUPPORT-PHASE-11-REMOVAL-MANIFEST.md`](file:///c:/xampp/htdocs/shopkingcpanel/docs/AI-SUPPORT-PHASE-11-REMOVAL-MANIFEST.md).
-
-### 3.1 Legacy Target Classification Breakdown
-
-| Classification | Files / Artifacts | Current Action | Post-Cutover Decommission Plan |
-|---|---|---|---|
-| `REMOVE` | `ChatController.php`, `AdminChatController.php`, `ChatService.php`, `ChatConversation.php`, `ChatMessage.php`, `GateLegacyChatMutationMiddleware.php`, legacy route blocks in `routes/api.php` | **RETAINED** | Permanently delete upon production cutover gate approval |
-| `REPLACE REFERENCE` | `AiAgentController.php` (legacy setting reads/writes), `FooterComponent.vue` | **RETAINED** | Clean up obsolete setting references upon production cutover gate approval |
-| `KEEP FOR MIGRATION/AUDIT` | `LegacyChatMigrationService.php`, `LegacyChatAuditService.php`, `LegacyMigrationVerificationService.php`, `LegacyMigrationRollbackService.php`, `LegacyConversationMapper.php`, `LegacyMessageMapper.php`, `LegacyConfigurationMapper.php`, `SourceChecksumCalculator.php`, `LegacyChatAuditCommand.php`, `support_legacy_migration_runs`, `support_legacy_migration_items` | **PRESERVED** | Indefinitely preserved for historical provenance, delta migration, and compliance |
-| `KEEP FOR DATA RETENTION` | Database tables `chat_conversations`, `chat_messages`, schema migration `2026_08_13_000001_create_live_chats_table.php` | **PRESERVED READ-ONLY** | Retained read-only in production database until separate explicit table-drop authorization |
-| `KEEP — NON-LEGACY AI INFRASTRUCTURE` | `AiController.php`, `AiAgentController.php`, `AiService.php`, `AiAgent.php`, `GatewayOption.php`, `Openrouter.php`, `Gemini.php`, `Openai.php`, `BackendAiSidebarComponent.vue`, `store/modules/ai.js`, `app/Support/**` | **PRESERVED** | Active runtime dependencies for modern Support domain and back-office AI tools |
+To eliminate obsolete runtime code while guaranteeing that Phase 9 delta migrations, audits, and verification remain functional:
+1. Created explicit migration models in `App\Support\Migration\Legacy\Models\`:
+   - `LegacyChatConversation.php` (maps to `chat_conversations` table)
+   - `LegacyChatMessage.php` (maps to `chat_messages` table)
+2. Updated all migration layer classes (`LegacyChatMigrationService`, `LegacyChatAuditService`, `LegacyMigrationVerificationService`, `LegacyConversationMapper`, `LegacyMessageMapper`, `SourceChecksumCalculator`) to reference these migration models.
+3. Completely deleted the legacy models `App\Models\ChatConversation` and `App\Models\ChatMessage`.
 
 ---
 
-## 4. Current Environment Verification & Regression Evidence
+## 3. Verification & Test Evidence
 
-### 4.1 Feature & Support Test Suites
-- **Phase 10 Cutover Hardening Tests:** `38 passed (162 assertions)` in `35.13s`
-- **Full Support Domain Suite:** `174 passed (773 assertions)` in `69.85s`
-- **Full Project Test Suite:** `176 passed (775 assertions)` in `67.08s` (0 failures)
+### 3.1 Phase 11 Dedicated Legacy Removal Test Suite
+- **Test File:** [`tests/Feature/Support/SupportPhase11LegacyRemovalTest.php`](file:///c:/xampp/htdocs/shopkingcpanel/tests/Feature/Support/SupportPhase11LegacyRemovalTest.php)
+- **Result:** **30 passed (67 assertions)** in `20.52s`
+- **Coverage Highlights:**
+  - Legacy customer, frontend, and admin chat routes absent from route table and return 404/405
+  - Modern `/api/v1/support/*` routes active and reachable
+  - Canonical `AiSupportWidget.vue` and `SupportCenterComponent.vue` present; legacy components absent
+  - Legacy runtime classes absent from codebase
+  - Migration audit, delta migration, verification, and ledger tables operational
+  - Selected AI provider (`openrouter`) configured and operational
+  - Customer conversations, messaging, guest tokens, customer isolation, human handoff, queue, internal notes, policies, voice capabilities, and realtime updates all verified
+  - Back-office AI system and AI Agent configuration operational
 
-### 4.2 Route Registration
-- **Route Count:** `581 routes` verified via `php artisan route:list` (0 errors)
-- Canonical Support API: `api/v1/support/*` registered and operational
-- Legacy prototype endpoints: Preserved and gated under `gateLegacyChat`
+### 3.2 Full Support Domain Suite
+- **Filter:** `--filter=Support`
+- **Result:** **204 passed (836 assertions)** in `70.73s` (0 failures)
 
-### 4.3 Frontend Compilation
-- **Vite Production Build:** `npm run build` completed in `1m 28s` (0 errors)
-- `AiSupportWidget.vue` active on customer frontend
-- `SupportCenterComponent.vue` active on admin backend (`/admin/support`)
-- `BackendAiSidebarComponent.vue` active on admin backend
+### 3.3 Full Project Test Suite
+- **Command:** `php artisan test`
+- **Result:** **206 passed (838 assertions)** in `70.04s` (0 failures, 0 regressions)
+
+### 3.4 Route Table Verification
+- **Command:** `php artisan route:list`
+- **Result:** Exactly `565 routes` registered (reduced from 581 after removing 16 legacy chat route registrations)
+
+### 3.5 Frontend Asset Compilation
+- **Command:** `npm run build`
+- **Result:** **SUCCESS** in `1m 35s` (0 errors)
 
 ---
 
-## 5. Deferral & Phase 12 Readiness
+## 4. Production Deployment & Branching Protocol
 
-- **Destructive Deletion:** Deferred until live production deployment executes the Phase 10 cutover runbook and validates production parity.
-- **Data Table Drop:** Deferred as a separate gated migration following retention review.
-- **Phase 12 Readiness:** **READY FOR REVIEW**
+- **`main` Branch:** Retains baseline `3cf1f2d` with full cutover and fallback capabilities for deployment to the live cPanel production environment.
+- **`phase11-local-cleanup` Branch:** Contains the complete, verified local legacy cleanup ready to be merged into `main` after production cutover verification is executed on cPanel.
+

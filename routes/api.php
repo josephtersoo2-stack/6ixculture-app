@@ -9,7 +9,6 @@ use App\Http\Controllers\Admin\AnalyticSectionController;
 use App\Http\Controllers\Admin\BarcodeController;
 use App\Http\Controllers\Admin\BenefitController;
 use App\Http\Controllers\Admin\CityController;
-use App\Http\Controllers\Admin\AdminChatController;
 use App\Http\Controllers\Admin\CompanyController;
 use App\Http\Controllers\Admin\CookiesController;
 use App\Http\Controllers\Admin\CountryCodeController;
@@ -85,7 +84,6 @@ use App\Http\Controllers\Auth\RefreshTokenController;
 use App\Http\Controllers\Auth\SignupController;
 use App\Http\Controllers\Auth\SocialLoginController;
 use App\Http\Controllers\Frontend\AddressController as FrontendAddressController;
-use App\Http\Controllers\Frontend\ChatController as FrontendChatController;
 use App\Http\Controllers\Frontend\BenefitController as FrontendBenefitController;
 use App\Http\Controllers\Frontend\CookiesController as FrontendCookiesController;
 use App\Http\Controllers\Frontend\CountryCodeController as FrontendCountryCodeController;
@@ -771,35 +769,13 @@ Route::prefix('admin')->name('admin.')->middleware(['auth:sanctum'])->group(func
         Route::get('/', [SubscriberController::class, 'index']);
         Route::post('/send-email', [SubscriberController::class, 'sendEmail']);
     });
-
-    Route::prefix('chat')->name('chat.')->middleware(['auth:sanctum'])->group(function () {
-        Route::get('/', [AdminChatController::class, 'index']);
-        Route::get('/show/{id}', [AdminChatController::class, 'show']);
-        Route::post('/reply/{id}', [AdminChatController::class, 'reply'])->middleware('gateLegacyChat');
-        Route::post('/update-status/{id}', [AdminChatController::class, 'updateStatus'])->middleware('gateLegacyChat');
-        Route::delete('/{id}', [AdminChatController::class, 'destroy'])->middleware('gateLegacyChat');
-    });
 });
 
 Route::prefix('ai-agent')->name('admin.ai-agent.alias.')->middleware(['auth:sanctum'])->group(function () {
     Route::get('/', [AiAgentController::class, 'index']);
     Route::match(['get', 'post', 'put', 'patch'], 'update', [AiAgentController::class, 'update']);
-    Route::any('chat-settings', [AiAgentController::class, 'chatSettings']);
-    Route::any('save-chat-settings', [AiAgentController::class, 'saveChatSettings']);
     Route::any('test-model', [AiAgentController::class, 'testModel']);
     Route::any('openrouter-models', [AiAgentController::class, 'openrouterModels']);
-});
-
-Route::prefix('chat')->name('frontend.chat.alias.')->group(function () {
-    Route::any('/history', [\App\Http\Controllers\Frontend\ChatController::class, 'getHistory']);
-    Route::any('/send', [\App\Http\Controllers\Frontend\ChatController::class, 'sendMessage'])->middleware('gateLegacyChat');
-    Route::any('/request-human', [\App\Http\Controllers\Frontend\ChatController::class, 'requestHuman'])->middleware('gateLegacyChat');
-});
-
-Route::prefix('frontend/chat')->name('frontend.chat.public.')->group(function () {
-    Route::any('/history', [\App\Http\Controllers\Frontend\ChatController::class, 'getHistory']);
-    Route::any('/send', [\App\Http\Controllers\Frontend\ChatController::class, 'sendMessage'])->middleware('gateLegacyChat');
-    Route::any('/request-human', [\App\Http\Controllers\Frontend\ChatController::class, 'requestHuman'])->middleware('gateLegacyChat');
 });
 
 Route::prefix('frontend')->name('frontend.')->middleware(['installed', 'apiKey', 'localization'])->group(function () {
@@ -957,12 +933,6 @@ Route::prefix('frontend')->name('frontend.')->middleware(['installed', 'apiKey',
 
     Route::prefix('outlet')->name('outlet.')->group(function () {
         Route::get('/', [FrontendOutletController::class, 'index']);
-    });
-
-    Route::prefix('chat')->name('chat.')->group(function () {
-        Route::get('/history', [FrontendChatController::class, 'getHistory']);
-        Route::post('/send', [FrontendChatController::class, 'sendMessage'])->middleware('gateLegacyChat');
-        Route::post('/request-human', [FrontendChatController::class, 'requestHuman'])->middleware('gateLegacyChat');
     });
 
     Route::match(['get', 'post'], '/payment/monnify/webhook', [\App\Http\Controllers\Frontend\MonnifyWebhookController::class, 'handle']);

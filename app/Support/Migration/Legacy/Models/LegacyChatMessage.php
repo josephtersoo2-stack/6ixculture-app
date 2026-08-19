@@ -1,15 +1,13 @@
 <?php
 
-namespace App\Models;
+namespace App\Support\Migration\Legacy\Models;
 
-use Illuminate\Database\Eloquent\Factories\HasFactory;
+use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-class ChatMessage extends Model
+class LegacyChatMessage extends Model
 {
-    use HasFactory;
-
     protected $table = 'chat_messages';
 
     protected $fillable = [
@@ -26,7 +24,7 @@ class ChatMessage extends Model
 
     public function conversation(): BelongsTo
     {
-        return $this->belongsTo(ChatConversation::class, 'conversation_id');
+        return $this->belongsTo(LegacyChatConversation::class, 'conversation_id');
     }
 
     public function sender(): BelongsTo

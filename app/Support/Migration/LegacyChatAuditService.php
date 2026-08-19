@@ -2,9 +2,9 @@
 
 namespace App\Support\Migration;
 
-use App\Models\ChatConversation;
-use App\Models\ChatMessage;
 use App\Models\User;
+use App\Support\Migration\Legacy\Models\LegacyChatConversation as ChatConversation;
+use App\Support\Migration\Legacy\Models\LegacyChatMessage as ChatMessage;
 use App\Support\Models\SupportLegacyMigrationItem;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;

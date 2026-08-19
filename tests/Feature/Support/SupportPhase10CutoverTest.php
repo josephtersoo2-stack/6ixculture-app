@@ -3,10 +3,10 @@
 namespace Tests\Feature\Support;
 
 use App\Models\AiAgent;
-use App\Models\ChatConversation;
-use App\Models\ChatMessage;
 use App\Models\GatewayOption;
 use App\Models\User;
+use App\Support\Migration\Legacy\Models\LegacyChatConversation as ChatConversation;
+use App\Support\Migration\Legacy\Models\LegacyChatMessage as ChatMessage;
 use App\Support\Cutover\SupportCutoverManager;
 use App\Support\Cutover\SupportReadinessService;
 use App\Support\Enums\ConversationStatus;
@@ -359,30 +359,16 @@ class SupportPhase10CutoverTest extends TestCase
         $this->assertTrue($readiness['realtime']['polling_fallback']);
     }
 
-    // 17. Legacy lock response is sanitized (no cutover_state, no /api/v1/support/*)
-    public function test_legacy_lock_response_is_strictly_sanitized(): void
+    // 17. Legacy chat routes and middleware are completely removed in Phase 11
+    public function test_legacy_chat_runtime_removed(): void
     {
-        SupportCutoverManager::enterDraining();
-
-        $response = $this->postJson('/api/chat/send', [
-            'message' => 'Hello legacy',
-        ]);
-
-        $response->assertStatus(423);
-        $response->assertJson([
-            'status' => false,
-            'code' => 'LEGACY_CHAT_UNAVAILABLE',
-            'message' => 'This chat service is no longer available. Please use the current support experience.',
-        ]);
-
-        $json = $response->getContent();
-        $this->assertStringNotContainsString('cutover_state', $json);
-        $this->assertStringNotContainsString('/api/v1/support', $json);
-        $this->assertStringNotContainsString('draining', $json);
-        $this->assertStringNotContainsString('LEGACY_CHAT_LOCKED', $json);
+        $this->assertFalse(class_exists('App\Http\Controllers\Frontend\ChatController'));
+        $this->assertFalse(class_exists('App\Http\Controllers\Admin\AdminChatController'));
+        $this->assertFalse(class_exists('App\Services\ChatService'));
+        $this->assertFalse(class_exists('App\Http\Middleware\Support\GateLegacyChatMutationMiddleware'));
     }
 
-    // 18. Legacy admin and customer mutations blocked in draining
+    // 18. Legacy admin and customer routes are absent after Phase 11 removal
     public function test_legacy_customer_and_admin_mutations_blocked_in_draining_mode(): void
     {
         $conv = ChatConversation::create(['session_token' => 'sess_block', 'status' => 'human']);
@@ -390,38 +376,29 @@ class SupportPhase10CutoverTest extends TestCase
         SupportCutoverManager::enterDraining();
 
         $res1 = $this->postJson('/api/chat/send', ['message' => 'Test']);
-        $res1->assertStatus(423);
+        $this->assertTrue(in_array($res1->status(), [404, 405]));
 
         $res2 = $this->postJson('/api/chat/request-human', ['session_token' => 'sess_block']);
-        $res2->assertStatus(423);
+        $this->assertTrue(in_array($res2->status(), [404, 405]));
 
         $res3 = $this->actingAs($this->admin, 'sanctum')->postJson("/api/admin/chat/reply/{$conv->id}", ['message' => 'Reply']);
-        $res3->assertStatus(423);
+        $this->assertTrue(in_array($res3->status(), [404, 405]));
 
         $res4 = $this->actingAs($this->admin, 'sanctum')->postJson("/api/admin/chat/update-status/{$conv->id}", ['status' => 'closed']);
-        $res4->assertStatus(423);
+        $this->assertTrue(in_array($res4->status(), [404, 405]));
 
         $res5 = $this->actingAs($this->admin, 'sanctum')->deleteJson("/api/admin/chat/{$conv->id}");
-        $res5->assertStatus(423);
+        $this->assertTrue(in_array($res5->status(), [404, 405]));
     }
 
-    // 19. Legacy read endpoints remain available
+    // 19. Legacy prototype chat endpoints return 404/405 or are absent from route collection
     public function test_legacy_history_read_remains_available_in_draining_and_support(): void
     {
-        $conv = ChatConversation::create(['session_token' => 'sess_read_ok', 'status' => 'ai']);
-        ChatMessage::create(['conversation_id' => $conv->id, 'sender_type' => 'user', 'message' => 'Existing legacy msg']);
-
-        // In draining mode
-        SupportCutoverManager::enterDraining();
-        $resDrain = $this->actingAs($this->admin, 'sanctum')->getJson('/api/admin/chat');
-        $resDrain->assertStatus(200);
-        $resDrain->assertJson(['status' => true]);
-
-        // In support mode
-        SupportCutoverManager::activateSupport();
-        $resSupport = $this->actingAs($this->admin, 'sanctum')->getJson("/api/admin/chat/show/{$conv->id}");
-        $resSupport->assertStatus(200);
-        $resSupport->assertJson(['status' => true]);
+        $legacyRoutes = array_filter(
+            \Illuminate\Support\Facades\Route::getRoutes()->getRoutes(),
+            fn ($r) => str_starts_with($r->uri(), 'api/admin/chat') || str_starts_with($r->uri(), 'api/chat')
+        );
+        $this->assertEmpty($legacyRoutes);
     }
 
     // 20. Modern Support API is canonical and functional
@@ -493,14 +470,19 @@ class SupportPhase10CutoverTest extends TestCase
         $this->assertEquals(SupportCutoverManager::STATE_SUPPORT, SupportCutoverManager::getState());
     }
 
-    // 23. Legacy classes and tables remain preserved
+    // 23. Legacy runtime classes removed, migration models and tables remain preserved
     public function test_legacy_classes_and_tables_remain_preserved(): void
     {
-        $this->assertTrue(class_exists(\App\Http\Controllers\Frontend\ChatController::class));
-        $this->assertTrue(class_exists(\App\Http\Controllers\Admin\AdminChatController::class));
-        $this->assertTrue(class_exists(\App\Services\ChatService::class));
-        $this->assertTrue(class_exists(\App\Models\ChatConversation::class));
-        $this->assertTrue(class_exists(\App\Models\ChatMessage::class));
+        $this->assertFalse(class_exists(\App\Http\Controllers\Frontend\ChatController::class));
+        $this->assertFalse(class_exists(\App\Http\Controllers\Admin\AdminChatController::class));
+        $this->assertFalse(class_exists(\App\Services\ChatService::class));
+        $this->assertFalse(class_exists(\App\Models\ChatConversation::class));
+        $this->assertFalse(class_exists(\App\Models\ChatMessage::class));
+
+        $this->assertTrue(class_exists(\App\Support\Migration\Legacy\Models\LegacyChatConversation::class));
+        $this->assertTrue(class_exists(\App\Support\Migration\Legacy\Models\LegacyChatMessage::class));
+        $this->assertTrue(Schema::hasTable('chat_conversations'));
+        $this->assertTrue(Schema::hasTable('chat_messages'));
     }
 
     // 24. Artisan support cutover command workflow

@@ -2,8 +2,8 @@
 
 namespace App\Support\Migration;
 
-use App\Models\ChatConversation;
 use App\Models\User;
+use App\Support\Migration\Legacy\Models\LegacyChatConversation as ChatConversation;
 use App\Support\Enums\ConversationMode;
 use App\Support\Enums\ConversationStatus;
 use App\Support\Enums\SupportChannel;

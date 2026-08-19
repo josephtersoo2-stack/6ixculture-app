@@ -32,7 +32,7 @@ class AiAgentController extends AdminController implements HasMiddleware
     public static function middleware(): array
     {
         return [
-            new Middleware('permission:settings', only: ['index', 'update', 'chatSettings', 'saveChatSettings', 'testModel', 'openrouterModels'])
+            new Middleware('permission:settings', only: ['index', 'update', 'testModel', 'openrouterModels'])
         ];
     }
 
@@ -99,87 +99,6 @@ class AiAgentController extends AdminController implements HasMiddleware
                 'status' => true,
                 'count'  => count($models),
                 'models' => $models,
-            ]);
-        } catch (Exception $e) {
-            return response()->json(['status' => false, 'message' => $e->getMessage()], 500);
-        }
-    }
-
-    /**
-     * Get or Save Chat AI Gateway and Model Settings
-     */
-    public function chatSettings(Request $request): JsonResponse
-    {
-        try {
-            if ($request->isMethod('post') && $request->has('chat_agent')) {
-                return $this->saveChatSettings($request);
-            }
-
-            $chatAgent = Settings::group('site')->get('site_chat_ai_agent') ?: 'gemini';
-            $chatModel = Settings::group('site')->get('site_chat_ai_model') ?: 'gemini-3.7-flash';
-
-            $models = [
-                'gemini' => [
-                    'gemini-3.7-flash'      => 'Gemini 3.7 Flash (Fast & Recommended)',
-                    'gemini-3.7-flash-lite' => 'Gemini 3.7 Flash Lite',
-                    'gemini-3.7-pro'        => 'Gemini 3.7 Pro',
-                    'gemini-2.5-flash'      => 'Gemini 2.5 Flash',
-                    'gemini-2.5-pro'        => 'Gemini 2.5 Pro',
-                    'gemini-2.0-flash'      => 'Gemini 2.0 Flash',
-                    'gemini-1.5-flash'      => 'Gemini 1.5 Flash',
-                    'gemini-1.5-pro'        => 'Gemini 1.5 Pro',
-                ],
-                'openrouter' => [
-                    'anthropic/claude-3.7-sonnet'       => 'Claude 3.7 Sonnet (Anthropic)',
-                    'anthropic/claude-3.5-sonnet'       => 'Claude 3.5 Sonnet (Anthropic)',
-                    'anthropic/claude-3.5-haiku'        => 'Claude 3.5 Haiku (Anthropic)',
-                    'openai/gpt-4o'                     => 'GPT-4o (OpenAI)',
-                    'openai/gpt-4o-mini'                => 'GPT-4o Mini (OpenAI)',
-                    'deepseek/deepseek-chat'            => 'DeepSeek V3',
-                    'deepseek/deepseek-r1'              => 'DeepSeek R1 (Reasoning)',
-                    'google/gemini-2.0-flash-001'       => 'Gemini 2.0 Flash (Google)',
-                    'meta-llama/llama-3.3-70b-instruct' => 'Llama 3.3 70B (Meta)',
-                ],
-                'openai' => [
-                    'gpt-4o'        => 'GPT-4o',
-                    'gpt-4o-mini'   => 'GPT-4o Mini',
-                    'gpt-4-turbo'   => 'GPT-4 Turbo',
-                    'gpt-3.5-turbo' => 'GPT-3.5 Turbo',
-                ],
-            ];
-
-            return response()->json([
-                'status'     => true,
-                'chat_agent' => $chatAgent,
-                'chat_model' => $chatModel,
-                'models'     => $models,
-            ]);
-        } catch (Exception $e) {
-            return response()->json(['status' => false, 'message' => $e->getMessage()], 500);
-        }
-    }
-
-    /**
-     * Save Chat AI Gateway and Model Settings
-     */
-    public function saveChatSettings(Request $request): JsonResponse
-    {
-        try {
-            $request->validate([
-                'chat_agent' => 'required|string',
-                'chat_model' => 'required|string',
-            ]);
-
-            Settings::group('site')->set([
-                'site_chat_ai_agent' => $request->input('chat_agent'),
-                'site_chat_ai_model' => $request->input('chat_model'),
-            ]);
-
-            return response()->json([
-                'status'     => true,
-                'message'    => 'Chat AI engine and model updated successfully!',
-                'chat_agent' => $request->input('chat_agent'),
-                'chat_model' => $request->input('chat_model'),
             ]);
         } catch (Exception $e) {
             return response()->json(['status' => false, 'message' => $e->getMessage()], 500);
