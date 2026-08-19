@@ -48,6 +48,16 @@ class SupportAuditLog extends Model
             }
         }
 
+        if (isset($attributes['resource_id']) && !is_numeric($attributes['resource_id'])) {
+            if (!isset($attributes['metadata']) || !is_array($attributes['metadata'])) {
+                $attributes['metadata'] = [];
+            }
+            if (!isset($attributes['metadata']['resource_identifier'])) {
+                $attributes['metadata']['resource_identifier'] = (string) $attributes['resource_id'];
+            }
+            $attributes['resource_id'] = null;
+        }
+
         if (empty($attributes['created_at'])) {
             $attributes['created_at'] = now();
         }

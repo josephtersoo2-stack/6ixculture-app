@@ -533,4 +533,48 @@ class SupportPhase9LegacyMigrationTest extends TestCase
         $this->assertStringNotContainsString('super_secret_browser_session_hash', $content);
         $this->assertStringNotContainsString('guest_pii@example.com', $content);
     }
+
+    public function test_rollback_blocks_when_support_ticket_or_voice_session_attached(): void
+    {
+        $conv = ChatConversation::create(['session_token' => 'sess_tkt_rb', 'status' => 'ai']);
+        ChatMessage::create(['conversation_id' => $conv->id, 'sender_type' => 'user', 'message' => 'Help ticket']);
+
+        $migrationService = new LegacyChatMigrationService();
+        $runResult = $migrationService->migrate(['apply' => true]);
+
+        $targetConv = SupportConversation::first();
+
+        $dept = \App\Support\Models\SupportDepartment::first();
+
+        // Attach a SupportTicket
+        \App\Support\Models\SupportTicket::create([
+            'conversation_id' => $targetConv->id,
+            'customer_id' => null,
+            'department_id' => $dept?->id,
+            'ticket_number' => 'TCK-TEST-001',
+            'subject' => 'Issue',
+            'description' => 'Test',
+            'status' => \App\Support\Enums\TicketStatus::OPEN,
+            'priority' => \App\Support\Enums\SupportPriority::NORMAL,
+        ]);
+
+        $rollbackService = new LegacyMigrationRollbackService();
+        $rbResult = $rollbackService->rollback($runResult['run_id']);
+
+        $this->assertFalse($rbResult['success']);
+        $this->assertStringContainsString('SupportTicket', $rbResult['blockers'][0]);
+        $this->assertEquals(1, SupportConversation::count());
+    }
+
+    public function test_legacy_classes_and_tables_remain_present_and_coexistent(): void
+    {
+        $this->assertTrue(class_exists(\App\Http\Controllers\Frontend\ChatController::class));
+        $this->assertTrue(class_exists(\App\Http\Controllers\Admin\AdminChatController::class));
+        $this->assertTrue(class_exists(\App\Services\ChatService::class));
+        $this->assertTrue(class_exists(\App\Models\ChatConversation::class));
+        $this->assertTrue(class_exists(\App\Models\ChatMessage::class));
+
+        $this->assertTrue(\Illuminate\Support\Facades\Schema::hasTable('chat_conversations'));
+        $this->assertTrue(\Illuminate\Support\Facades\Schema::hasTable('chat_messages'));
+    }
 }

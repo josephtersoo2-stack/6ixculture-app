@@ -121,8 +121,9 @@ class LegacyMigrationRollbackService
                 'actor_type' => 'system',
                 'action' => 'legacy_rollback_completed',
                 'resource_type' => 'migration_run',
-                'resource_id' => $run->public_id,
+                'resource_id' => $run->id,
                 'metadata' => [
+                    'run_public_id' => $run->public_id,
                     'rolled_back_conversations' => $rolledBackConvs,
                     'rolled_back_messages' => $rolledBackMsgs,
                 ],

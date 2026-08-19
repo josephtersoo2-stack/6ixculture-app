@@ -166,8 +166,9 @@ class LegacyChatMigrationService
                 'actor_type' => 'system',
                 'action' => "legacy_migration_{$finalStatus}",
                 'resource_type' => 'migration_run',
-                'resource_id' => $runPublicId,
+                'resource_id' => $run->id,
                 'metadata' => [
+                    'run_public_id' => $runPublicId,
                     'stats' => $stats,
                     'config_migrated' => $configResult['migrated'] ?? false,
                 ],

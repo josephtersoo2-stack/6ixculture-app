@@ -80,8 +80,9 @@ class LegacyConfigurationMapper
                             'actor_type' => 'system',
                             'action' => 'legacy_config_migrated',
                             'resource_type' => 'setting',
-                            'resource_id' => 'site_default_ai_agent',
+                            'resource_id' => $targetAgentId,
                             'metadata' => [
+                                'setting_key' => 'site_default_ai_agent',
                                 'legacy_agent_slug' => $legacySlug,
                                 'new_agent_id' => $targetAgentId,
                             ],
