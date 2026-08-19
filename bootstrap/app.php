@@ -59,7 +59,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'apiKey' => ApiKeyMiddleware::class,
             'localization' => localization::class,
             'installed' => Installed::class,
-
+            'gateLegacyChat' => \App\Http\Middleware\Support\GateLegacyChatMutationMiddleware::class,
         ]);
     })
     ->withBroadcasting(

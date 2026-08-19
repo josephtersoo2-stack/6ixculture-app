@@ -775,9 +775,9 @@ Route::prefix('admin')->name('admin.')->middleware(['auth:sanctum'])->group(func
     Route::prefix('chat')->name('chat.')->middleware(['auth:sanctum'])->group(function () {
         Route::get('/', [AdminChatController::class, 'index']);
         Route::get('/show/{id}', [AdminChatController::class, 'show']);
-        Route::post('/reply/{id}', [AdminChatController::class, 'reply']);
-        Route::post('/update-status/{id}', [AdminChatController::class, 'updateStatus']);
-        Route::delete('/{id}', [AdminChatController::class, 'destroy']);
+        Route::post('/reply/{id}', [AdminChatController::class, 'reply'])->middleware('gateLegacyChat');
+        Route::post('/update-status/{id}', [AdminChatController::class, 'updateStatus'])->middleware('gateLegacyChat');
+        Route::delete('/{id}', [AdminChatController::class, 'destroy'])->middleware('gateLegacyChat');
     });
 });
 
@@ -792,14 +792,14 @@ Route::prefix('ai-agent')->name('admin.ai-agent.alias.')->middleware(['auth:sanc
 
 Route::prefix('chat')->name('frontend.chat.alias.')->group(function () {
     Route::any('/history', [\App\Http\Controllers\Frontend\ChatController::class, 'getHistory']);
-    Route::any('/send', [\App\Http\Controllers\Frontend\ChatController::class, 'sendMessage']);
-    Route::any('/request-human', [\App\Http\Controllers\Frontend\ChatController::class, 'requestHuman']);
+    Route::any('/send', [\App\Http\Controllers\Frontend\ChatController::class, 'sendMessage'])->middleware('gateLegacyChat');
+    Route::any('/request-human', [\App\Http\Controllers\Frontend\ChatController::class, 'requestHuman'])->middleware('gateLegacyChat');
 });
 
 Route::prefix('frontend/chat')->name('frontend.chat.public.')->group(function () {
     Route::any('/history', [\App\Http\Controllers\Frontend\ChatController::class, 'getHistory']);
-    Route::any('/send', [\App\Http\Controllers\Frontend\ChatController::class, 'sendMessage']);
-    Route::any('/request-human', [\App\Http\Controllers\Frontend\ChatController::class, 'requestHuman']);
+    Route::any('/send', [\App\Http\Controllers\Frontend\ChatController::class, 'sendMessage'])->middleware('gateLegacyChat');
+    Route::any('/request-human', [\App\Http\Controllers\Frontend\ChatController::class, 'requestHuman'])->middleware('gateLegacyChat');
 });
 
 Route::prefix('frontend')->name('frontend.')->middleware(['installed', 'apiKey', 'localization'])->group(function () {
@@ -961,8 +961,8 @@ Route::prefix('frontend')->name('frontend.')->middleware(['installed', 'apiKey',
 
     Route::prefix('chat')->name('chat.')->group(function () {
         Route::get('/history', [FrontendChatController::class, 'getHistory']);
-        Route::post('/send', [FrontendChatController::class, 'sendMessage']);
-        Route::post('/request-human', [FrontendChatController::class, 'requestHuman']);
+        Route::post('/send', [FrontendChatController::class, 'sendMessage'])->middleware('gateLegacyChat');
+        Route::post('/request-human', [FrontendChatController::class, 'requestHuman'])->middleware('gateLegacyChat');
     });
 
     Route::match(['get', 'post'], '/payment/monnify/webhook', [\App\Http\Controllers\Frontend\MonnifyWebhookController::class, 'handle']);
