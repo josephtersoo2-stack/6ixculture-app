@@ -17,13 +17,10 @@ class GateLegacyChatMutationMiddleware
     public function handle(Request $request, Closure $next): Response
     {
         if (!SupportCutoverManager::canMutateLegacy()) {
-            $state = SupportCutoverManager::getState();
-
             return response()->json([
                 'status' => false,
-                'code' => 'LEGACY_CHAT_LOCKED',
-                'cutover_state' => $state,
-                'message' => "The legacy chat service is currently locked in '{$state}' cutover mode. All support operations have been transitioned to the modern 6ixCulture Support domain at /api/v1/support/*.",
+                'code' => 'LEGACY_CHAT_UNAVAILABLE',
+                'message' => 'This chat service is no longer available. Please use the current support experience.',
             ], Response::HTTP_LOCKED);
         }
 

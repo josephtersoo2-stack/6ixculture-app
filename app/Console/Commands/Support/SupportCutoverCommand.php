@@ -20,8 +20,7 @@ class SupportCutoverCommand extends Command
                             {--preflight : Run preflight checks and dry-run without state mutation}
                             {--enter-draining : Transition system state to draining to block legacy writes}
                             {--activate-support : Run final delta migration, verify parity, and activate Support mode}
-                            {--rollback : Safely revert cutover state to legacy (refuses if post-cutover activity exists)}
-                            {--force : Force state transition or rollback if required}
+                            {--rollback : Safely revert cutover state to legacy (strictly blocked if post-cutover activity exists)}
                             {--chunk=100 : Batch size for migration runs}';
 
     /**
@@ -67,6 +66,7 @@ class SupportCutoverCommand extends Command
             ['Metric', 'Value'],
             [
                 ['Current State', strtoupper($status['state'])],
+                ['Readiness Status', strtoupper($readiness['status'])],
                 ['Support Domain Canonical', $status['is_support_canonical'] ? 'YES' : 'NO'],
                 ['Legacy Writes Blocked', $status['legacy_writes_blocked'] ? 'YES' : 'NO'],
                 ['Cutover Started At', $status['metadata']['cutover_started_at'] ?? 'N/A'],
@@ -79,8 +79,25 @@ class SupportCutoverCommand extends Command
                 ['Active Policies', $readiness['governance']['active_policies']],
                 ['Active Tools', $readiness['governance']['active_tools']],
                 ['Published Articles', $readiness['governance']['published_articles']],
+                ['Voice STT Ready', $readiness['voice']['stt_ready'] ? 'YES' : 'NO'],
+                ['Voice TTS Ready', $readiness['voice']['tts_ready'] ? 'YES' : 'NO'],
+                ['Realtime Supported', $readiness['realtime']['supported'] ? 'YES' : 'NO (Polling Active)'],
             ]
         );
+
+        if (!empty($readiness['warnings'])) {
+            $this->warn("\nReadiness Warnings:");
+            foreach ($readiness['warnings'] as $warning) {
+                $this->line("  ⚠ {$warning}");
+            }
+        }
+
+        if (!empty($readiness['blockers'])) {
+            $this->error("\nReadiness Blockers:");
+            foreach ($readiness['blockers'] as $blocker) {
+                $this->line("  ✖ {$blocker}");
+            }
+        }
 
         return Command::SUCCESS;
     }
@@ -116,17 +133,41 @@ class SupportCutoverCommand extends Command
 
         $this->line("• Migration dry-run completed (status: {$dryRun['status']}).");
 
-        // 3. Readiness
+        if ($dryRun['status'] === 'failed') {
+            $this->error("Migration dry-run failed. Cutover cannot proceed.");
+            return Command::FAILURE;
+        }
+
+        // 3. Readiness Evaluation
         $readinessService = new SupportReadinessService();
         $readiness = $readinessService->getReadiness();
 
         $this->info("\nPreflight Summary:");
-        $this->line("  ✓ Support Tables Ready: " . ($readiness['infrastructure']['support_tables_ready'] ? 'YES' : 'NO'));
-        $this->line("  ✓ AI Provider Configured: " . ($readiness['ai_readiness']['provider_configured'] ? 'YES' : 'NO'));
-        $this->line("  ✓ Governance Seeding Ready: " . ($readiness['governance']['ready'] ? 'YES' : 'NO'));
-        $this->line("  ✓ Current Cutover State: " . strtoupper(SupportCutoverManager::getState()));
+        $this->line("  • Status: " . strtoupper($readiness['status']));
+        $this->line("  • Support Tables: " . ($readiness['infrastructure']['support_tables_ready'] ? 'PASS' : 'FAIL'));
+        $this->line("  • AI Provider: " . ($readiness['ai_readiness']['provider_configured'] ? 'PASS' : 'FAIL'));
+        $this->line("  • Governance Seeding: " . ($readiness['governance']['ready'] ? 'PASS' : 'FAIL'));
+        $this->line("  • Voice STT / TTS: " . ($readiness['voice']['stt_ready'] ? 'CONFIGURED' : 'OPTIONAL_UNCONFIGURED'));
+        $this->line("  • Realtime Transport: " . ($readiness['realtime']['supported'] ? 'ACTIVE' : 'POLLING_FALLBACK'));
+        $this->line("  • Current Cutover State: " . strtoupper(SupportCutoverManager::getState()));
 
-        $this->info("\nSystem is ready to proceed with: php artisan support:cutover --enter-draining");
+        if (!empty($readiness['warnings'])) {
+            $this->warn("\nWarnings (Non-blocking):");
+            foreach ($readiness['warnings'] as $warning) {
+                $this->line("  ⚠ {$warning}");
+            }
+        }
+
+        if (!$readiness['ready'] || !empty($readiness['blockers'])) {
+            $this->error("\nPreflight FAILED — Critical Blockers Detected:");
+            foreach ($readiness['blockers'] as $blocker) {
+                $this->line("  ✖ {$blocker}");
+            }
+            $this->error("\nCutover sequence cannot proceed until blockers are resolved.");
+            return Command::FAILURE;
+        }
+
+        $this->info("\nPreflight PASSED. System is ready to proceed with: php artisan support:cutover --enter-draining");
 
         return Command::SUCCESS;
     }
@@ -157,19 +198,29 @@ class SupportCutoverCommand extends Command
 
         if ($result['success']) {
             $this->info($result['message']);
+            if (!empty($result['is_already_active'])) {
+                return Command::SUCCESS;
+            }
+
             $this->table(
                 ['Result Item', 'Value'],
                 [
                     ['Activated State', strtoupper($result['state'])],
-                    ['Final Delta Run ID', $result['migration_run_id']],
-                    ['Verification Passed', $result['verification']['passed'] ? 'YES' : 'NO'],
-                    ['Mismatches', $result['verification']['mismatch_count']],
+                    ['Final Delta Run ID', $result['migration_run_id'] ?? 'N/A'],
+                    ['Verification Passed', ($result['verification']['passed'] ?? false) ? 'YES' : 'NO'],
+                    ['Mismatches', $result['verification']['mismatch_count'] ?? 0],
                 ]
             );
             return Command::SUCCESS;
         }
 
         $this->error($result['message']);
+        if (!empty($result['blockers'])) {
+            $this->error("\nActivation Blockers:");
+            foreach ($result['blockers'] as $blocker) {
+                $this->line("  ✖ {$blocker}");
+            }
+        }
         if (!empty($result['verification']['mismatches'])) {
             $this->error("Verification mismatches: " . json_encode($result['verification']['mismatches']));
         }
@@ -178,10 +229,9 @@ class SupportCutoverCommand extends Command
 
     private function handleRollback(): int
     {
-        $this->info("Executing Controlled Cutover Rollback...");
+        $this->info("Evaluating Rollback Safety & Executing Controlled Rollback...");
 
-        $force = (bool) $this->option('force');
-        $result = SupportCutoverManager::rollback(null, $force);
+        $result = SupportCutoverManager::rollback();
 
         if ($result['success']) {
             $this->info($result['message']);
@@ -190,7 +240,7 @@ class SupportCutoverCommand extends Command
 
         $this->error($result['message']);
         if (!empty($result['blockers'])) {
-            $this->warn("Rollback Blockers:");
+            $this->warn("\nRollback Blockers (Fail-Closed Data Protection):");
             foreach ($result['blockers'] as $blocker) {
                 $this->line("  • {$blocker}");
             }

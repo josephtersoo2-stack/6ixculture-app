@@ -1,18 +1,18 @@
-# 6ixCulture Enterprise AI Support — Phase 10 Cutover Report
+# 6ixCulture Enterprise AI Support — Phase 10 Cutover Report (Safety Hardened)
 
 **Repository:** `josephtersoo2-stack/6ixculture-app`  
 **Branch:** `main`  
-**Phase:** Phase 10 — Production Cutover  
-**Baseline Commit:** Phase 9 validation `07ff1bb`  
+**Phase:** Phase 10 — Production Cutover (Safety Hardening Pass)  
+**Baseline Commit:** `442e49b`  
 **Execution Timestamp:** 2026-08-19  
 
 ---
 
-## 1. Executive Summary
+## 1. Executive Summary & Readiness Declaration
 
-Phase 10 implements the server-authoritative production cutover mechanism for the **6ixCulture Enterprise AI Support System**. This milestone establishes the new AI Support domain (`/api/v1/support/*`, `AiSupportWidget.vue`, `SupportCenterComponent.vue`) as the canonical customer and agent communication platform while enforcing single-write-path integrity and non-destructive legacy coexistence.
+This report documents the Phase 10 Cutover Safety Hardening pass for the **6ixCulture Enterprise AI Support System**. This hardening pass resolves all transition matrix defects, eliminates rollback bypasses, implements strict preflight and activation readiness gates, integrates provider-driven voice capabilities, and strictly sanitizes legacy locked responses.
 
-### Cutover Status Declaration
+### Production Truthfulness Declaration
 ```
 PHASE 10 IMPLEMENTATION: COMPLETE
 CUTOVER REHEARSAL: PASSED
@@ -22,95 +22,131 @@ PRODUCTION READINESS: READY FOR REVIEW
 
 ---
 
-## 2. Core Technical Implementations
+## 2. Hardened Core Technical Implementations
 
-### 2.1 Server-Authoritative Cutover State Machine
-- **State Manager:** [`app/Support/Cutover/SupportCutoverManager.php`](file:///c:/xampp/htdocs/shopkingcpanel/app/Support/Cutover/SupportCutoverManager.php)
-  - States: `legacy`, `draining`, `support`.
-  - Stored persistently via `Settings::group('support')->get('cutover_state')`.
-  - Methods: `getState()`, `isLegacy()`, `isDraining()`, `isSupport()`, `canMutateLegacy()`, `enterDraining($userId)`, `activateSupport($userId, $options)`, `rollback($userId, $force)`, `getStatus()`.
-  - Invariant: Activation strictly executes a final delta migration and enforces a 0-mismatch verification gate before marking Support as canonical.
+### 2.1 Explicit Legal State Transition Matrix
+- **Implementation:** [`app/Support/Cutover/SupportCutoverManager.php`](file:///c:/xampp/htdocs/shopkingcpanel/app/Support/Cutover/SupportCutoverManager.php)
+- **Legal Matrix:**
+  - `legacy` $\to$ `draining` $\to$ `support`
+  - Idempotent transitions (`legacy` $\to$ `legacy`, `draining` $\to$ `draining`, `support` $\to$ `support`) are safely handled.
+  - Backward transition `support` $\to$ `draining` is **strictly forbidden, fails closed**, leaves state = `support`, and records an audit log (`support_cutover_invalid_transition_rejected`).
+  - Direct transition `legacy` $\to$ `support` is **strictly rejected** (system must enter draining first).
 
-### 2.2 Legacy Mutation Gating Middleware
-- **Middleware:** [`app/Http/Middleware/Support/GateLegacyChatMutationMiddleware.php`](file:///c:/xampp/htdocs/shopkingcpanel/app/Http/Middleware/Support/GateLegacyChatMutationMiddleware.php)
-- **Registered Alias:** `gateLegacyChat` in [`bootstrap/app.php`](file:///c:/xampp/htdocs/shopkingcpanel/bootstrap/app.php).
-- **Enforced Routes:** Attached to all legacy write endpoints in [`routes/api.php`](file:///c:/xampp/htdocs/shopkingcpanel/routes/api.php):
-  - Customer Send Message (`/api/chat/send`, `/api/frontend/chat/send`)
-  - Customer Request Human (`/api/chat/request-human`, `/api/frontend/chat/request-human`)
-  - Admin Chat Reply (`/api/admin/chat/reply/{id}`)
-  - Admin Status Update (`/api/admin/chat/update-status/{id}`)
-  - Admin Delete (`/api/admin/chat/{id}`)
-- **Behavior:** In `draining` and `support` states, returns HTTP 423 (Locked) with migration instructions to `/api/v1/support/*`. Legacy read endpoints remain accessible.
+### 2.2 Unbypassable Rollback Guard & Comprehensive Domain Activity Detection
+- **Implementation:** `SupportCutoverManager::evaluateRollbackSafety()` & `SupportCutoverManager::rollback()`
+- **Centralized Safety Inspection:**
+  - Replaces all bypass options (`--force` bypass removed).
+  - Inspects all post-activation domain entities:
+    - `SupportConversation`
+    - `SupportMessage`
+    - `SupportTicket`
+    - `SupportVoiceSession`
+    - `SupportAssignment`
+    - `SupportFeedback`
+    - Domain operational audit actions (excluding cutover administrative lifecycle events)
+  - If any post-activation activity exists, automated rollback **strictly fails closed** with detailed blocker metrics.
 
-### 2.3 Sanitized Readiness & Preflight Service
-- **Service:** [`app/Support/Cutover/SupportReadinessService.php`](file:///c:/xampp/htdocs/shopkingcpanel/app/Support/Cutover/SupportReadinessService.php)
-- Aggregates real-time health across schema tables, AI provider configuration, broadcast channels, voice adapters, and governance seeding without exposing credentials, tokens, or private endpoints.
+### 2.3 Real Readiness Computation & Critical Preflight Gates
+- **Implementation:** [`app/Support/Cutover/SupportReadinessService.php`](file:///c:/xampp/htdocs/shopkingcpanel/app/Support/Cutover/SupportReadinessService.php)
+- **Computed Status:** `ready`, `degraded`, or `blocked`.
+- **Critical Gates (Blocking):**
+  - Required schema tables (12 Support tables).
+  - AI provider resolution (`site_default_ai_agent` or active provider API key).
+  - Governance seeding (active departments, policies, tools).
+- **Graceful Fallbacks (Non-blocking Warnings):**
+  - Provider-driven voice capabilities derived dynamically via `VoiceCapabilityService`.
+  - Realtime transport status reflecting broadcast driver configuration with HTTP polling fallback.
+- **Preflight Enforcement:**
+  - `php artisan support:cutover --preflight` exits with failure (code 1) if critical blockers exist.
+  - `php artisan support:cutover --activate-support` re-evaluates readiness immediately before persisting state and fails closed if blockers are detected.
 
-### 2.4 Cutover Artisan Command
-- **Command:** [`app/Console/Commands/Support/SupportCutoverCommand.php`](file:///c:/xampp/htdocs/shopkingcpanel/app/Console/Commands/Support/SupportCutoverCommand.php)
-- Signature: `support:cutover {--status} {--preflight} {--enter-draining} {--activate-support} {--rollback} {--force} {--chunk=100}`.
-- Provides operator visibility, dry-run preflight checks, draining mode activation, delta migration + verification gate execution, and guarded rollbacks.
-
-### 2.5 Operational Runbook
-- **Runbook:** [`docs/AI-SUPPORT-PHASE-10-CUTOVER-RUNBOOK.md`](file:///c:/xampp/htdocs/shopkingcpanel/docs/AI-SUPPORT-PHASE-10-CUTOVER-RUNBOOK.md)
-- Complete operator manual with step-by-step instructions, preflight verification, traffic routing reference, monitoring guidelines, and incident recovery protocols.
+### 2.4 Sanitized Legacy Lock Response
+- **Implementation:** [`app/Http/Middleware/Support/GateLegacyChatMutationMiddleware.php`](file:///c:/xampp/htdocs/shopkingcpanel/app/Http/Middleware/Support/GateLegacyChatMutationMiddleware.php)
+- **Sanitized Response Payload:**
+  ```json
+  {
+    "status": false,
+    "code": "LEGACY_CHAT_UNAVAILABLE",
+    "message": "This chat service is no longer available. Please use the current support experience."
+  }
+  ```
+- **Information Boundary:** Zero exposure of `cutover_state`, internal route namespaces (`/api/v1/support/*`), migration statuses, or database details.
 
 ---
 
 ## 3. Test & Verification Evidence
 
-### 3.1 Phase 10 Feature Test Suite (`SupportPhase10CutoverTest.php`)
-17 dedicated feature tests asserting:
-1. Cutover manager defaults to `legacy` state.
-2. State transition from `legacy` to `draining` persists in settings and audit logs.
-3. Activation runs delta migration and enforces 0-mismatch verification gate.
-4. Legacy customer message send blocked in `draining` mode (HTTP 423).
-5. Legacy customer request human blocked in `draining` mode (HTTP 423).
-6. Legacy admin reply blocked in `draining` mode (HTTP 423).
-7. Legacy admin status update blocked in `draining` mode (HTTP 423).
-8. Legacy admin delete blocked in `draining` mode (HTTP 423).
-9. Legacy mutations blocked in `support` mode.
-10. Legacy historical reads remain accessible in `draining` and `support`.
-11. Modern Support API is canonical and operational in `support` mode.
-12. Rollback allowed when zero post-cutover activity exists.
-13. Rollback blocked (fail-closed) when post-cutover conversations exist.
-14. Rollback blocked (fail-closed) when post-cutover tickets exist.
-15. Readiness service sanitizes metrics without secret leakage.
-16. Legacy classes and database tables remain preserved.
-17. Full artisan CLI workflow (`--status`, `--preflight`, `--enter-draining`, `--activate-support`, `--rollback`).
+### 3.1 Phase 10 Hardened Feature Test Suite (`SupportPhase10CutoverTest.php`)
+24 comprehensive tests covering:
+1. `test_cutover_manager_defaults_to_legacy_state`
+2. `test_cutover_manager_transitions_legacy_to_draining_and_persists`
+3. `test_cutover_manager_activates_support_from_draining_with_delta_and_verification`
+4. `test_support_to_draining_transition_is_rejected_and_fails_closed`
+5. `test_support_to_draining_cannot_bypass_rollback_guard`
+6. `test_rollback_blocked_after_post_cutover_agent_assignment`
+7. `test_rollback_blocked_after_post_cutover_domain_audit_action`
+8. `test_activate_support_from_legacy_is_rejected_until_draining`
+9. `test_activate_support_from_support_is_idempotent`
+10. `test_preflight_fails_when_support_table_is_missing`
+11. `test_preflight_fails_when_ai_provider_unconfigured`
+12. `test_preflight_fails_when_governance_departments_empty`
+13. `test_support_activation_fails_when_readiness_blocked_after_draining`
+14. `test_readiness_status_reflects_truthful_state`
+15. `test_voice_readiness_comes_from_provider_capabilities`
+16. `test_realtime_readiness_reports_transport_and_polling_fallback`
+17. `test_legacy_lock_response_is_strictly_sanitized`
+18. `test_legacy_customer_and_admin_mutations_blocked_in_draining_mode`
+19. `test_legacy_history_read_remains_available_in_draining_and_support`
+20. `test_support_api_canonical_and_functional_in_support_mode`
+21. `test_rollback_allowed_when_zero_post_cutover_activity`
+22. `test_rollback_blocked_fail_closed_when_post_cutover_tickets_exist`
+23. `test_legacy_classes_and_tables_remain_preserved`
+24. `test_artisan_support_cutover_command_workflow`
 
-**Result:** `17 passed (70 assertions)`
+**Result:** `24 passed (107 assertions)`
 
 ### 3.2 Full Support Suite Regression
 ```
-Tests:    153 passed (681 assertions)
-Duration: 53.64s
+Tests:    160 passed (718 assertions)
+Duration: 86.84s
 ```
 
-### 3.3 Full Project Regression
+### 3.3 Full Project Suite Regression
 ```
-Tests:    155 passed (683 assertions)
-Duration: 64.55s
+Tests:    162 passed (720 assertions)
+Duration: 62.81s
 ```
 
-### 3.4 Frontend Asset Build
+### 3.4 Route Registration List
+```
+php artisan route:list
+Showing [581] routes (0 errors)
+```
+
+### 3.5 Frontend Asset Compilation
 ```
 npm run build
 vite v6.4.2 building for production...
-✓ built in 1m 44s (0 errors)
+✓ built in 1m 23s (0 errors)
 ```
 
 ---
 
-## 4. Preservation & Coexistence Summary
+## 4. Local Operational Rehearsal Summary
 
-In compliance with the project invariants:
-- **No Legacy Deletions:** All legacy controllers (`ChatController`, `AdminChatController`), services (`ChatService`), models (`ChatConversation`, `ChatMessage`), and frontend components remain fully preserved and untouched.
-- **No Dual-Writes:** Enforced via `GateLegacyChatMutationMiddleware` and `SupportCutoverManager`.
-- **Phase 11 Deferred:** Phase 11 verified cleanup will be handled in a future authorized phase.
+A complete rehearsal was conducted on the local staging environment:
+1. `php artisan support:cutover --status`: Accurately identified missing AI provider setting and reported status `BLOCKED` with exit code 0.
+2. `php artisan support:cutover --preflight`: Successfully failed with code 1 while provider was missing; then passed with code 0 once provider was configured.
+3. `php artisan support:cutover --enter-draining`: Transitioned system state from `legacy` to `draining` (exit code 0).
+4. `php artisan support:cutover --activate-support`: Executed final delta, verified 0 mismatches, and transitioned state to `support` (exit code 0).
+5. Attempted backward transition `php artisan support:cutover --enter-draining`: Rejected and failed closed with exit code 1.
+6. Created post-cutover domain message and executed `php artisan support:cutover --rollback`: Blocked and failed closed with exit code 1.
+7. Cleaned test domain records and verified safe rollback to `legacy` (exit code 0).
 
 ---
 
-## 5. Stop Condition
+## 5. Preservation & Stop Condition
 
-Phase 10 is complete. No Phase 11 work was started. All legacy assets remain preserved.
+- **Preservation:** All legacy controllers, models, services, routes, Vue components, and Phase 9 migration tools remain intact.
+- **Phase 11:** Not initiated.
+- **Stop Condition:** Phase 10 Safety Hardening is complete.
