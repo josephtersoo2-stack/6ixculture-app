@@ -18,9 +18,11 @@ Before deploying changes to the production server:
 
 2. **Verify Local Automated Test Health**:
    ```bash
+   php artisan test tests/Feature/Support/SupportPhase12ProductionHardeningTest.php
    php artisan test --filter=Support
+   php artisan test
    ```
-   Must exit with code 0 and 0 failures.
+   All test executions must exit with code 0 and 0 failures.
 
 3. **Verify Asset Build**:
    ```bash
@@ -101,41 +103,13 @@ curl -i https://yourdomain.com/api/v1/support/health
 ```json
 {
   "success": true,
-  "data": {
-    "status": "ready",
-    "ready": true,
-    "blockers": [],
-    "warnings": [],
-    "infrastructure": {
-      "support_tables_ready": true
-    },
-    "ai_readiness": {
-      "provider": "gemini",
-      "configured": true
-    },
-    "governance": {
-      "ready": true,
-      "active_departments": 7,
-      "active_policies": 16,
-      "active_tools": 14,
-      "published_articles": 8
-    },
-    "realtime": {
-      "supported": false,
-      "transport": "log",
-      "polling_fallback": true
-    },
-    "voice": {
-      "stt_ready": true,
-      "tts_ready": true
-    },
-    "environment": {
-      "app_env": "production",
-      "debug": false
-    },
-    "queue": {
-      "driver": "sync"
-    }
+  "status": "ready",
+  "services": {
+    "support": true,
+    "text": true,
+    "voice": true,
+    "realtime": false,
+    "polling_fallback": true
   }
 }
 ```

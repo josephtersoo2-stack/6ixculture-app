@@ -27,6 +27,7 @@ use App\Support\Services\SupportOrchestrator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
@@ -49,6 +50,14 @@ class SupportPhase12ProductionHardeningTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+
+        RateLimiter::clear('support-conversations');
+        RateLimiter::clear('support-messages');
+        RateLimiter::clear('support-voice');
+        RateLimiter::clear('support-actions');
+        RateLimiter::clear('support-polling');
+        RateLimiter::clear('support-agent');
+        RateLimiter::clear('support-admin');
 
         $this->seed([
             \Database\Seeders\SiteTableSeeder::class,
@@ -242,6 +251,8 @@ class SupportPhase12ProductionHardeningTest extends TestCase
         $this->assertNotNull(RateLimiter::limiter('support-conversations'));
         $this->assertNotNull(RateLimiter::limiter('support-messages'));
         $this->assertNotNull(RateLimiter::limiter('support-voice'));
+        $this->assertNotNull(RateLimiter::limiter('support-actions'));
+        $this->assertNotNull(RateLimiter::limiter('support-polling'));
         $this->assertNotNull(RateLimiter::limiter('support-agent'));
         $this->assertNotNull(RateLimiter::limiter('support-admin'));
     }
@@ -262,9 +273,96 @@ class SupportPhase12ProductionHardeningTest extends TestCase
     }
 
     /**
-     * 9. AI Provider Failure Graceful Handling: Error does not expose internal stack trace or crash.
+     * 9. Behavioral Rate Limiting: Guest conversation creation abuse returns 429.
      */
-    public function test_ai_provider_error_produces_safe_sanitized_message(): void
+    public function test_behavioral_rate_limiting_guest_conversations_returns_429(): void
+    {
+        $ip = '198.51.100.55';
+
+        // Guest limit is 10 per minute
+        for ($i = 0; $i < 10; $i++) {
+            $resp = $this->withServerVariables(['REMOTE_ADDR' => $ip])
+                ->postJson('/api/v1/support/conversations', ['subject' => "Guest test {$i}"]);
+            $this->assertEquals(201, $resp->getStatusCode(), "Request {$i} should succeed");
+        }
+
+        // 11th request must be throttled
+        $throttled = $this->withServerVariables(['REMOTE_ADDR' => $ip])
+            ->postJson('/api/v1/support/conversations', ['subject' => 'Over limit request']);
+
+        $throttled->assertStatus(429);
+    }
+
+    /**
+     * 10. Behavioral Rate Limiting: Action mutation abuse returns 429.
+     */
+    public function test_behavioral_rate_limiting_action_mutations_returns_429(): void
+    {
+        $conv = SupportConversation::create([
+            'public_id' => (string) Str::uuid(),
+            'customer_id' => $this->customer1->id,
+            'status' => ConversationStatus::AI_ACTIVE,
+            'mode' => ConversationMode::AI,
+        ]);
+
+        // Rate limit for support-actions is 30 per minute for authenticated customer
+        for ($i = 0; $i < 30; $i++) {
+            $resp = $this->actingAs($this->customer1, 'sanctum')
+                ->postJson("/api/v1/support/conversations/{$conv->public_id}/language", ['language' => 'en']);
+            $this->assertEquals(200, $resp->getStatusCode(), "Language update {$i} should succeed");
+        }
+
+        // 31st request must be throttled
+        $throttled = $this->actingAs($this->customer1, 'sanctum')
+            ->postJson("/api/v1/support/conversations/{$conv->public_id}/language", ['language' => 'en']);
+
+        $throttled->assertStatus(429);
+    }
+
+    /**
+     * 11. String-Level Secret Redaction: Masks embedded tokens, API keys, passwords, and credentials.
+     */
+    public function test_audit_redaction_service_string_level_redaction(): void
+    {
+        $inputs = [
+            'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.t-ID' => 'Authorization: Bearer [REDACTED]',
+            'Here is my key: sk-live1234567890abcdef' => 'Here is my key: [REDACTED]',
+            'Google Key: AIzaSyD9876543210zyxwvutsrqponmlkjihg' => 'Google Key: [REDACTED]',
+            'Config api_key=secret-key-value-123 in url' => 'Config api_key=[REDACTED] in url',
+            'User set password: my-super-secret-password-123' => 'User set password:[REDACTED]',
+            'Session token=eyJhbGciOi...' => 'Session token=[REDACTED]',
+            'credential: internal-credential-token-xyz' => 'credential:[REDACTED]',
+        ];
+
+        foreach ($inputs as $input => $expectedMatch) {
+            $sanitized = AuditRedactionService::sanitizeString($input);
+            $this->assertStringNotContainsString('sk-live', $sanitized);
+            $this->assertStringNotContainsString('AIzaSy', $sanitized);
+            $this->assertStringNotContainsString('my-super-secret-password', $sanitized);
+            $this->assertStringNotContainsString('internal-credential-token', $sanitized);
+            $this->assertStringContainsString('[REDACTED]', $sanitized);
+        }
+
+        // Test recursive structure string redaction
+        $complex = [
+            'nested' => [
+                'raw_error' => 'Failed calling Google API with key AIzaSyTestKey123456',
+                'header' => 'Bearer eyJsecretJWT',
+            ],
+            'safe_text' => 'Regular customer inquiry about shoes',
+        ];
+
+        $sanitizedComplex = AuditRedactionService::sanitize($complex);
+        $this->assertEquals('Regular customer inquiry about shoes', $sanitizedComplex['safe_text']);
+        $this->assertStringNotContainsString('AIzaSyTestKey123456', $sanitizedComplex['nested']['raw_error']);
+        $this->assertStringContainsString('[REDACTED]', $sanitizedComplex['nested']['raw_error']);
+        $this->assertStringContainsString('[REDACTED]', $sanitizedComplex['nested']['header']);
+    }
+
+    /**
+     * 12. AI Provider Error Produces Safe Sanitized Message & Structured Payload.
+     */
+    public function test_ai_provider_error_produces_safe_sanitized_message_and_payload(): void
     {
         $conv = SupportConversation::create([
             'public_id' => (string) Str::uuid(),
@@ -277,41 +375,29 @@ class SupportPhase12ProductionHardeningTest extends TestCase
         $incoming = new ChatMessageDTO(
             senderType: SenderType::CUSTOMER,
             messageType: MessageType::TEXT,
-            content: 'Please help me',
+            content: 'Help with order containing secret token: sk-secret-12345',
             isInternal: false
         );
 
         $dto = $orchestrator->handle($conv, $incoming);
 
         $this->assertNotNull($dto);
-        $this->assertNotEmpty($dto->content);
-        // Ensure no API keys or secrets are in the returned content
-        $this->assertStringNotContainsString('sk-', $dto->content);
-        $this->assertStringNotContainsString('AIzaSy', $dto->content);
+        $this->assertEquals(
+            'I am currently having trouble processing your request. Please try again shortly or request a human support agent.',
+            $dto->content
+        );
+        $this->assertIsArray($dto->structuredPayload);
+        $this->assertEquals('AI_PROVIDER_UNAVAILABLE', $dto->structuredPayload['error']['code'] ?? null);
+
+        // Ensure no internal tokens, headers or stack traces exist
+        $serialized = json_encode($dto);
+        $this->assertStringNotContainsString('sk-secret', $serialized);
+        $this->assertStringNotContainsString('AIzaSy', $serialized);
+        $this->assertStringNotContainsString('PDOException', $serialized);
     }
 
     /**
-     * 10. Audit Log Redaction: Sensitive keywords are redacted before persistence.
-     */
-    public function test_audit_log_redaction_service_masks_secrets(): void
-    {
-        $payload = [
-            'api_key' => 'sk-secret-key-12345',
-            'password' => 'super_secret_password',
-            'token' => 'bearer_token_secret_value',
-            'safe_field' => 'visible_customer_data',
-        ];
-
-        $sanitized = AuditRedactionService::sanitize($payload);
-
-        $this->assertEquals('[REDACTED]', $sanitized['api_key']);
-        $this->assertEquals('[REDACTED]', $sanitized['password']);
-        $this->assertEquals('[REDACTED]', $sanitized['token']);
-        $this->assertEquals('visible_customer_data', $sanitized['safe_field']);
-    }
-
-    /**
-     * 11. Security Policy Engine: Denied actions are blocked.
+     * 13. Security Policy Engine: Denied actions are blocked.
      */
     public function test_policy_engine_denies_restricted_actions(): void
     {
@@ -331,7 +417,7 @@ class SupportPhase12ProductionHardeningTest extends TestCase
     }
 
     /**
-     * 12. Security Policy Engine: Confirmation required for sensitive mutations.
+     * 14. Security Policy Engine: Confirmation required for sensitive mutations.
      */
     public function test_policy_engine_requires_confirmation_for_cancellations(): void
     {
@@ -351,7 +437,7 @@ class SupportPhase12ProductionHardeningTest extends TestCase
     }
 
     /**
-     * 13. Realtime Polling Fallback: Incremental updates return new messages.
+     * 15. Realtime Polling Fallback: Incremental updates return new messages.
      */
     public function test_realtime_polling_endpoint_returns_incremental_updates(): void
     {
@@ -389,7 +475,7 @@ class SupportPhase12ProductionHardeningTest extends TestCase
     }
 
     /**
-     * 14. Voice Capability Graceful Degradation.
+     * 16. Voice Capability Graceful Degradation.
      */
     public function test_voice_capabilities_endpoint_reports_safe_structure(): void
     {
@@ -406,38 +492,61 @@ class SupportPhase12ProductionHardeningTest extends TestCase
     }
 
     /**
-     * 15. Health & Readiness Endpoint: Status reports clean metadata.
+     * 17. Public Health Endpoint: Shallow safe projection without infrastructure disclosure.
      */
-    public function test_health_readiness_endpoint_returns_safe_report(): void
+    public function test_public_health_endpoint_projects_safe_shallow_status_and_avoids_disclosure(): void
     {
         $response = $this->getJson('/api/v1/support/health');
 
         $this->assertContains($response->getStatusCode(), [200, 503]);
         $response->assertJsonStructure([
             'success',
-            'data' => [
-                'status',
-                'ready',
-                'infrastructure' => ['support_tables_ready'],
-                'governance',
-                'realtime',
+            'status',
+            'services' => [
+                'support',
+                'text',
                 'voice',
-                'environment' => ['app_env', 'debug'],
-                'queue' => ['driver'],
+                'realtime',
+                'polling_fallback',
             ]
         ]);
 
-        // Assert NO raw API secrets or database passwords in payload
         $content = $response->getContent();
-        $this->assertStringNotContainsString('DB_PASSWORD', $content);
-        $this->assertStringNotContainsString('sk-', $content);
-        $this->assertStringNotContainsString('AIzaSy', $content);
+
+        // Strictly verify NO infrastructure or migration details are disclosed
+        $disallowedStrings = [
+            'support_conversations',
+            'support_messages',
+            'support_legacy_migration_runs',
+            'cutover',
+            'activated_by',
+            'final_delta_migration_run_id',
+            'app_env',
+            'debug',
+            'queue',
+            'cache',
+            'session',
+            'infrastructure',
+            'provider_configured',
+            'DB_PASSWORD',
+            'sk-',
+            'AIzaSy',
+            'Bearer',
+        ];
+
+        foreach ($disallowedStrings as $disallowed) {
+            $this->assertStringNotContainsString(
+                $disallowed,
+                $content,
+                "Public health endpoint leaked sensitive indicator: {$disallowed}"
+            );
+        }
     }
 
     /**
-     * 16. Support Readiness Service: Reports schema readiness without crashing.
+     * 18. Support Readiness Service: Retains full internal fidelity for CLI cutover & operations.
      */
-    public function test_support_readiness_service_compiles_indicators(): void
+    public function test_support_readiness_service_compiles_indicators_with_full_fidelity(): void
     {
         $service = new SupportReadinessService();
         $readiness = $service->getReadiness();
@@ -445,11 +554,19 @@ class SupportPhase12ProductionHardeningTest extends TestCase
         $this->assertIsArray($readiness);
         $this->assertArrayHasKey('status', $readiness);
         $this->assertArrayHasKey('ready', $readiness);
+        $this->assertArrayHasKey('infrastructure', $readiness);
+        $this->assertArrayHasKey('governance', $readiness);
+        $this->assertArrayHasKey('realtime', $readiness);
+        $this->assertArrayHasKey('voice', $readiness);
+        $this->assertArrayHasKey('environment', $readiness);
+        $this->assertArrayHasKey('queue', $readiness);
+        $this->assertArrayHasKey('cache', $readiness);
+        $this->assertArrayHasKey('session', $readiness);
         $this->assertTrue($readiness['infrastructure']['support_tables_ready']);
     }
 
     /**
-     * 17. Phase 9 Legacy Migration Tooling & Models Remain Fully Operational.
+     * 19. Phase 9 Legacy Migration Tooling & Models Remain Fully Operational.
      */
     public function test_phase9_migration_models_and_tables_are_retained(): void
     {
@@ -463,7 +580,7 @@ class SupportPhase12ProductionHardeningTest extends TestCase
     }
 
     /**
-     * 18. Phase 11 Legacy Runtime Remains Deleted.
+     * 20. Phase 11 Legacy Runtime Remains Deleted.
      */
     public function test_phase11_legacy_runtime_classes_and_routes_remain_absent(): void
     {
@@ -485,7 +602,7 @@ class SupportPhase12ProductionHardeningTest extends TestCase
     }
 
     /**
-     * 19. Back-office AI Infrastructure is Preserved and Functional.
+     * 21. Back-office AI Infrastructure is Preserved and Functional.
      */
     public function test_admin_ai_agent_infrastructure_remains_active(): void
     {
@@ -506,7 +623,7 @@ class SupportPhase12ProductionHardeningTest extends TestCase
     }
 
     /**
-     * 20. Canonical Support Routes are Registered and Functional.
+     * 22. Canonical Support Routes are Registered and Functional.
      */
     public function test_canonical_support_routes_are_active(): void
     {

@@ -1,11 +1,11 @@
-# 6ixCulture Enterprise AI Support — Phase 12 Localhost Acceptance Report
+# 6ixCulture Enterprise AI Support — Phase 12 Localhost Acceptance Report: Final Hardening Pass
 
 ## 1. Test Environment Details
 - **Operating System**: Windows (Local XAMPP Environment)
 - **PHP Version**: 8.2+
 - **Database**: SQLite (In-Memory for automated test isolation) & MySQL (Local ShopKing database for runtime migrations)
 - **Git Branch**: `phase12-production-hardening`
-- **Base Commit**: `15591f937d22f8545384f0ef91ef75eb90a6d40f` (`phase11-local-cleanup`)
+- **Base Commit**: `15591f9` (`phase11-local-cleanup`)
 - **Main Production Candidate**: `3cf1f2d`
 
 ---
@@ -21,29 +21,31 @@ Command:
 Output:
 ```text
    PASS  Tests\Feature\Support\SupportPhase12ProductionHardeningTest
-  ✓ customer cannot view other customers conversation                                                            1.57s  
-  ✓ guest with wrong token is denied                                                                             0.38s  
-  ✓ unauthorized user is forbidden from agent endpoints                                                          0.52s  
-  ✓ authorized agent can access queue                                                                            0.38s  
-  ✓ internal notes are never exposed to customers                                                                0.53s  
-  ✓ agent can store internal note                                                                                1.13s  
-  ✓ support rate limiters are registered                                                                         0.32s  
-  ✓ legitimate customer request succeeds                                                                         0.33s  
-  ✓ ai provider error produces safe sanitized message                                                            0.50s  
-  ✓ audit log redaction service masks secrets                                                                    0.29s  
-  ✓ policy engine denies restricted actions                                                                      0.49s  
-  ✓ policy engine requires confirmation for cancellations                                                        0.54s  
-  ✓ realtime polling endpoint returns incremental updates                                                        0.40s  
-  ✓ voice capabilities endpoint reports safe structure                                                           0.37s  
-  ✓ health readiness endpoint returns safe report                                                                0.50s  
-  ✓ support readiness service compiles indicators                                                                0.33s  
-  ✓ phase9 migration models and tables are retained                                                              0.52s  
-  ✓ phase11 legacy runtime classes and routes remain absent                                                      0.37s  
-  ✓ admin ai agent infrastructure remains active                                                                 0.63s  
-  ✓ canonical support routes are active                                                                          0.40s  
+  ✓ customer cannot view other customers conversation                                                            1.30s  
+  ✓ guest with wrong token is denied                                                                             0.30s  
+  ✓ unauthorized user is forbidden from agent endpoints                                                          0.33s  
+  ✓ authorized agent can access queue                                                                            0.48s  
+  ✓ internal notes are never exposed to customers                                                                0.30s  
+  ✓ agent can store internal note                                                                                0.52s  
+  ✓ support rate limiters are registered                                                                         0.28s  
+  ✓ legitimate customer request succeeds                                                                         0.44s  
+  ✓ behavioral rate limiting guest conversations returns 429                                                     0.33s  
+  ✓ behavioral rate limiting action mutations returns 429                                                        0.59s  
+  ✓ audit redaction service string level redaction                                                               0.28s  
+  ✓ ai provider error produces safe sanitized message and payload                                                0.46s  
+  ✓ policy engine denies restricted actions                                                                      0.30s  
+  ✓ policy engine requires confirmation for cancellations                                                        0.29s  
+  ✓ realtime polling endpoint returns incremental updates                                                        0.30s  
+  ✓ voice capabilities endpoint reports safe structure                                                           0.51s  
+  ✓ public health endpoint projects safe shallow status and avoids disclosure                                    0.34s  
+  ✓ support readiness service compiles indicators with full fidelity                                             0.40s  
+  ✓ phase9 migration models and tables are retained                                                              0.35s  
+  ✓ phase11 legacy runtime classes and routes remain absent                                                      0.47s  
+  ✓ admin ai agent infrastructure remains active                                                                 1.07s  
+  ✓ canonical support routes are active                                                                          0.60s  
 
-  Tests:    20 passed (90 assertions)
-  Duration: 10.83s
+  Tests:    22 passed (188 assertions)
+  Duration: 10.48s
 ```
 
 ### 2.2 Comprehensive Support Domain Test Suite
@@ -54,8 +56,20 @@ Command:
 
 Output:
 ```text
-  Tests:    224 passed (926 assertions)
-  Duration: 116.45s
+  Tests:    226 passed (1024 assertions)
+  Duration: 75.47s
+```
+
+### 2.3 Full Project Test Suite
+Command:
+```powershell
+& "C:\xampp\php\php.exe" artisan test
+```
+
+Output:
+```text
+  Tests:    228 passed (1026 assertions)
+  Duration: 84.94s
 ```
 
 ---
@@ -64,11 +78,21 @@ Output:
 
 | Verification Item | Command / Check | Result | Notes |
 |---|---|---|---|
-| Support Route Count | `artisan route:list --path=v1/support` | 57 Routes | All canonical routes active with zero legacy collisions |
-| Rate Limiters | `RateLimiter::limiter(...)` | Verified | Throttling configured for conversations, messages, voice, agent, admin |
-| Task Scheduler | `artisan schedule:list` | Code 0 | Scheduler ready for cPanel cron invocation |
-| Route Caching | `artisan route:cache` | Successful | Clean serialization of all 200+ routes without name collisions |
-| Config & View Caching | `artisan config:cache && artisan view:cache` | Successful | All configuration and views compiled |
-| Database Migration | `artisan migrate --force` | Migration applied | Performance compound indexes added |
-| Frontend Assets | `npm run build` | Built in 1m 22s | Production bundle and manifest generated |
-| Zero Data Loss | Schema Table Check | Verified | `chat_conversations` and `chat_messages` preserved |
+| Total Route Count | `artisan route:list` | 566 Routes | All routes registered cleanly |
+| Support Route Count | `artisan route:list --path=v1/support` | 57 Routes | All canonical support routes active |
+| Public Health Output | `GET /api/v1/support/health` | Shallow & Safe | `{success, status, services: {support, text, voice, realtime, polling_fallback}}` |
+| Rate Limiters | `RateLimiter::limiter(...)` | 7 Limiters | `support-conversations`, `support-messages`, `support-voice`, `support-actions`, `support-polling`, `support-agent`, `support-admin` |
+| Task Scheduler | `artisan schedule:list` | Code 0 | Ready for cPanel cron execution |
+| Route Caching | `artisan route:cache` | Successful | Serialization verified without collisions |
+| Config & View Caching | `artisan config:cache && artisan view:cache` | Successful | All caches warmed without error |
+| Frontend Assets | `npm run build` | Built in 2m 28s | Bundled in `public/build/` with manifest |
+| Zero Data Loss | Table Schema Check | Verified | `chat_conversations` and `chat_messages` tables preserved |
+
+---
+
+## 4. Formal Declarations
+- **PHASE 12 LOCAL HARDENING**: COMPLETE
+- **LOCAL ACCEPTANCE**: PASSED
+- **PRODUCTION DEPLOYMENT**: NOT EXECUTED
+- **PRODUCTION CUTOVER**: NOT EXECUTED
+- **MAIN BRANCH MODIFIED**: NO

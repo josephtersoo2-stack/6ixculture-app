@@ -71,18 +71,19 @@ class SupportOrchestrator implements AiOrchestratorInterface
         $maxTurns = 3;
         $lastResponse = null;
 
-        // 6. Execute Provider Chat Loop (supports up to 3 recursive tool execution turns to prevent infinite loops)
-        $turn = 0;
-        $maxTurns = 3;
-        $lastResponse = null;
-
         while ($turn < $maxTurns) {
             $turn++;
             try {
                 $response = $provider->chat($history, $tools);
             } catch (\Throwable $e) {
-                Log::warning("AI Provider chat exception: " . $e->getMessage());
-                $errMessage = $this->createErrorMessage($conversation, 'AI service is temporarily unavailable. Please try again shortly or request a human agent.');
+                Log::warning('AI Provider chat exception', [
+                    'event' => 'ai_provider_exception',
+                    'provider' => $provider->providerName(),
+                    'conversation_public_id' => $conversation->public_id,
+                    'exception_class' => get_class($e),
+                    'message' => AuditRedactionService::sanitizeString($e->getMessage()),
+                ]);
+                $errMessage = $this->createErrorMessage($conversation, 'AI_PROVIDER_UNAVAILABLE');
                 return $this->toDTO($errMessage);
             }
 
@@ -264,19 +265,44 @@ class SupportOrchestrator implements AiOrchestratorInterface
     protected function createErrorMessage(SupportConversation $conversation, string $err, array $meta = []): SupportMessage
     {
         $sanitizedMeta = AuditRedactionService::sanitize($meta);
-        $safeErr = is_string($err) ? (string)AuditRedactionService::sanitize($err) : 'Service issue';
+        $safeErr = AuditRedactionService::sanitizeString($err);
 
-        $isTechnical = (bool)preg_match('/(api[-_]?key|secret|token|bearer|unauthorized|forbidden|sql|exception|stack trace|connection refused|timeout|curl|http status)/i', $err);
+        $isTechnical = empty($err) || $err === 'AI_PROVIDER_UNAVAILABLE' || (bool)preg_match('/(api[\s\-_]?key|secret|token|bearer|unauthorized|forbidden|sql|exception|stack trace|connection refused|timeout|curl|http status|model turn|configured|openrouter|gemini|openai|provider)/i', $err);
+
         $displayContent = $isTechnical
             ? 'I am currently having trouble processing your request. Please try again shortly or request a human support agent.'
-            : 'Sorry, we encountered an issue processing your request: ' . $safeErr;
+            : $safeErr;
+
+        $errorCode = $isTechnical ? 'AI_PROVIDER_UNAVAILABLE' : 'SUPPORT_ERROR';
+
+        // Internal audit logging of handled AI error (sanitized diagnostics)
+        try {
+            SupportAuditLog::log([
+                'conversation_id' => $conversation->id,
+                'actor_type' => $conversation->customer_id ? 'customer' : 'guest',
+                'actor_id' => $conversation->customer_id,
+                'action' => 'ai_provider_error',
+                'authorization_result' => 'error',
+                'after_data' => [
+                    'code' => $errorCode,
+                    'detail' => $safeErr,
+                    'metadata' => $sanitizedMeta,
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            // Non-blocking audit safety
+        }
 
         return SupportMessage::create([
             'conversation_id' => $conversation->id,
             'sender_type' => SenderType::AI,
             'message_type' => MessageType::ERROR,
             'content' => $displayContent,
-            'structured_payload' => ['error' => $safeErr, 'metadata' => $sanitizedMeta],
+            'structured_payload' => [
+                'error' => [
+                    'code' => $errorCode,
+                ],
+            ],
             'is_internal' => false,
         ]);
     }

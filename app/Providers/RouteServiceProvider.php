@@ -61,6 +61,22 @@ class RouteServiceProvider extends ServiceProvider
             return Limit::perMinute(60)->by($request->user('sanctum')?->id ?: $request->user()?->id ?: $request->ip());
         });
 
+        RateLimiter::for('support-actions', function (Request $request) {
+            $user = $request->user('sanctum') ?? $request->user();
+            $guestKey = $request->header('X-Guest-Token') ?: $request->input('guest_token') ?: $request->ip();
+            return $user
+                ? Limit::perMinute(30)->by($user->id)
+                : Limit::perMinute(15)->by($guestKey);
+        });
+
+        RateLimiter::for('support-polling', function (Request $request) {
+            $user = $request->user('sanctum') ?? $request->user();
+            $guestKey = $request->header('X-Guest-Token') ?: $request->input('guest_token') ?: $request->ip();
+            return $user
+                ? Limit::perMinute(120)->by($user->id)
+                : Limit::perMinute(60)->by($guestKey);
+        });
+
         $this->routes(function () {
             Route::middleware('api')
                 ->prefix('api')

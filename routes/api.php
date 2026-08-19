@@ -947,16 +947,16 @@ Route::prefix('v1/support')->name('v1.support.')->middleware(['installed', 'apiK
     Route::get('/health', [\App\Http\Controllers\Api\V1\Support\SupportHealthController::class, 'index']);
     Route::get('/voice/capabilities', [\App\Http\Controllers\Api\V1\Support\Voice\SupportVoiceController::class, 'capabilities']);
     Route::post('/conversations', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'store'])->middleware(['throttle:support-conversations']);
-    Route::get('/conversations', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'index']);
+    Route::get('/conversations', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'index'])->middleware(['throttle:support-conversations']);
     Route::get('/conversations/{conversation}', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'show']);
     Route::get('/conversations/{conversation}/language', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'getLanguage']);
-    Route::post('/conversations/{conversation}/language', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'updateLanguage']);
+    Route::post('/conversations/{conversation}/language', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'updateLanguage'])->middleware(['throttle:support-actions']);
     Route::post('/conversations/{conversation}/messages', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'sendMessage'])->middleware(['throttle:support-messages']);
-    Route::get('/conversations/{conversation}/messages', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'getMessages']);
-    Route::get('/conversations/{conversation}/updates', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'getUpdates']);
-    Route::post('/conversations/{conversation}/request-human', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'requestHuman']);
-    Route::post('/conversations/{conversation}/resolve', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'resolve']);
-    Route::post('/conversations/{conversation}/actions/{action}', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'executeAction']);
+    Route::get('/conversations/{conversation}/messages', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'getMessages'])->middleware(['throttle:support-polling']);
+    Route::get('/conversations/{conversation}/updates', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'getUpdates'])->middleware(['throttle:support-polling']);
+    Route::post('/conversations/{conversation}/request-human', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'requestHuman'])->middleware(['throttle:support-actions']);
+    Route::post('/conversations/{conversation}/resolve', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'resolve'])->middleware(['throttle:support-actions']);
+    Route::post('/conversations/{conversation}/actions/{action}', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'executeAction'])->middleware(['throttle:support-actions']);
 
     /*
     |--------------------------------------------------------------------------
