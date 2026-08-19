@@ -653,4 +653,104 @@ class SupportPhase12ProductionHardeningTest extends TestCase
             $this->assertNotNull($found, "Expected canonical route {$expectedUri} is missing.");
         }
     }
+
+    /**
+     * 23. Adapter Security Logging & Secret Redaction Test.
+     */
+    public function test_adapter_security_logging_does_not_leak_secrets(): void
+    {
+        $testStrings = [
+            'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.doNotLeak',
+            'Failed connecting with OpenAI key sk-secret-1234567890abcdef',
+            'Google Gemini key AIzaSyFakeSecretValue12345 invalid',
+            'Request to https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent?key=AIzaSySecretInUrl failed',
+            'Context details: api_key=superSecretKey123 and password=superSecretPassword456',
+        ];
+
+        foreach ($testStrings as $rawString) {
+            $sanitized = AuditRedactionService::sanitizeString($rawString);
+
+            $this->assertStringNotContainsString('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9', $sanitized);
+            $this->assertStringNotContainsString('sk-secret-1234567890abcdef', $sanitized);
+            $this->assertStringNotContainsString('AIzaSyFakeSecretValue12345', $sanitized);
+            $this->assertStringNotContainsString('AIzaSySecretInUrl', $sanitized);
+            $this->assertStringNotContainsString('superSecretKey123', $sanitized);
+            $this->assertStringNotContainsString('superSecretPassword456', $sanitized);
+        }
+    }
+
+    /**
+     * 24. Raw Provider Errors are Never Exposed to Customers.
+     */
+    public function test_raw_provider_error_is_never_exposed_to_customer(): void
+    {
+        $conv = SupportConversation::create([
+            'public_id' => (string) Str::uuid(),
+            'customer_id' => $this->customer1->id,
+            'status' => ConversationStatus::AI_ACTIVE,
+            'mode' => ConversationMode::AI,
+        ]);
+
+        $mockAdapter = new class implements \App\Support\Contracts\AiProviderInterface {
+            public function chat(array $messages, array $tools = []): array {
+                return [
+                    'text' => null,
+                    'tool_calls' => [],
+                    'usage' => ['prompt_tokens' => 0, 'completion_tokens' => 0, 'total_tokens' => 0],
+                    'metadata' => ['model' => 'test-model', 'provider' => 'openrouter'],
+                    'finish_reason' => 'error',
+                    'error' => 'Rate limit exceeded for internal account ORG-SECRET-123. Quota exhausted on cluster-09.',
+                ];
+            }
+            public function supportsToolCalling(): bool { return true; }
+            public function supportsStructuredOutput(): bool { return true; }
+            public function supportsStreaming(): bool { return false; }
+            public function isConfigured(): bool { return true; }
+            public function providerName(): string { return 'openrouter'; }
+        };
+
+        $orchestrator = new SupportOrchestrator(null, null, null, $mockAdapter);
+        $incoming = new ChatMessageDTO(
+            senderType: SenderType::CUSTOMER,
+            messageType: MessageType::TEXT,
+            content: 'How do I track my order?',
+            isInternal: false
+        );
+
+        $dto = $orchestrator->handle($conv, $incoming);
+
+        $this->assertNotNull($dto);
+        $this->assertEquals(
+            'I am currently having trouble processing your request. Please try again shortly or request a human support agent.',
+            $dto->content
+        );
+        $this->assertEquals('AI_PROVIDER_UNAVAILABLE', $dto->structuredPayload['error']['code'] ?? null);
+
+        // Prove internal provider diagnostic is NOT in customer message or payload
+        $this->assertStringNotContainsString('ORG-SECRET-123', $dto->content);
+        $this->assertStringNotContainsString('Quota exhausted', $dto->content);
+        $this->assertStringNotContainsString('cluster-09', $dto->content);
+
+        $serializedPayload = json_encode($dto->structuredPayload);
+        $this->assertStringNotContainsString('ORG-SECRET-123', $serializedPayload);
+        $this->assertStringNotContainsString('cluster-09', $serializedPayload);
+    }
+
+    /**
+     * 25. TLS Verification is Enabled on All Support Providers.
+     */
+    public function test_production_support_adapters_do_not_contain_without_verifying(): void
+    {
+        $openrouterPath = app_path('Support/Services/Adapters/OpenrouterSupportAdapter.php');
+        $geminiPath = app_path('Support/Services/Adapters/GeminiSupportAdapter.php');
+
+        $this->assertFileExists($openrouterPath);
+        $this->assertFileExists($geminiPath);
+
+        $openrouterContent = file_get_contents($openrouterPath);
+        $geminiContent = file_get_contents($geminiPath);
+
+        $this->assertStringNotContainsString('withoutVerifying', $openrouterContent);
+        $this->assertStringNotContainsString('withoutVerifying', $geminiContent);
+    }
 }

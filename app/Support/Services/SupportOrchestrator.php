@@ -25,15 +25,18 @@ class SupportOrchestrator implements AiOrchestratorInterface
     protected ToolRegistry $toolRegistry;
     protected SupportActionPolicyEngine $policyEngine;
     protected SupportContextAssembler $contextAssembler;
+    protected ?AiProviderInterface $provider;
 
     public function __construct(
         ?ToolRegistry $toolRegistry = null,
         ?SupportActionPolicyEngine $policyEngine = null,
-        ?SupportContextAssembler $contextAssembler = null
+        ?SupportContextAssembler $contextAssembler = null,
+        ?AiProviderInterface $provider = null
     ) {
         $this->toolRegistry = $toolRegistry ?? new ToolRegistry();
         $this->policyEngine = $policyEngine ?? new SupportActionPolicyEngine();
         $this->contextAssembler = $contextAssembler ?? new SupportContextAssembler();
+        $this->provider = $provider;
     }
 
     public function handle(SupportConversation $conversation, ChatMessageDTO $incomingMessage): ChatMessageDTO
@@ -58,7 +61,7 @@ class SupportOrchestrator implements AiOrchestratorInterface
         ]);
 
         // 3. Resolve active AI provider adapter
-        $provider = AiProviderFactory::make();
+        $provider = $this->provider ?? AiProviderFactory::make();
 
         // 4. Build secure grounded message context via SupportContextAssembler
         $history = $this->contextAssembler->assemble($conversation, $userMessage);
@@ -88,7 +91,7 @@ class SupportOrchestrator implements AiOrchestratorInterface
             }
 
             if (!empty($response['error'])) {
-                $errMessage = $this->createErrorMessage($conversation, $response['error'], $response['metadata'] ?? []);
+                $errMessage = $this->createErrorMessage($conversation, 'AI_PROVIDER_UNAVAILABLE', array_merge($response['metadata'] ?? [], ['raw_error' => $response['error']]));
                 return $this->toDTO($errMessage);
             }
 
@@ -240,7 +243,7 @@ class SupportOrchestrator implements AiOrchestratorInterface
             return $this->toDTO($savedMsg);
         }
 
-        $failedMsg = $this->createErrorMessage($conversation, 'AI model turn ended without response.');
+        $failedMsg = $this->createErrorMessage($conversation, 'AI_PROVIDER_UNAVAILABLE');
         return $this->toDTO($failedMsg);
     }
 

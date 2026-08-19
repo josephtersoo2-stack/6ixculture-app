@@ -4,6 +4,7 @@ namespace App\Support\Services\Adapters;
 
 use App\Http\AiAgents\Agents\Gemini as BaseGemini;
 use App\Support\Contracts\AiProviderInterface;
+use App\Support\Services\AuditRedactionService;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -29,7 +30,7 @@ class GeminiSupportAdapter implements AiProviderInterface
                 'usage' => ['prompt_tokens' => 0, 'completion_tokens' => 0, 'total_tokens' => 0],
                 'metadata' => ['model' => $this->model, 'provider' => 'gemini'],
                 'finish_reason' => 'error',
-                'error' => 'Gemini API key is not configured.',
+                'error' => 'AI_PROVIDER_CONFIGURATION_ERROR',
             ];
         }
 
@@ -110,7 +111,6 @@ class GeminiSupportAdapter implements AiProviderInterface
             $response = Http::withHeaders([
                 'Content-Type' => 'application/json',
             ])
-            ->withoutVerifying()
             ->timeout(30)
             ->post($url, $payload);
 
@@ -157,24 +157,41 @@ class GeminiSupportAdapter implements AiProviderInterface
                 ];
             }
 
-            $err = $response->json('error.message') ?? $response->body();
+            $status = $response->status();
+            $sanitizedMsg = AuditRedactionService::sanitizeString((string)($response->json('error.message') ?? "HTTP {$status}"));
+
+            Log::warning('GeminiSupportAdapter request failed', [
+                'event' => 'gemini_request_failed',
+                'provider' => 'gemini',
+                'status' => $status,
+                'message' => $sanitizedMsg,
+            ]);
+
+            $errorCode = $status === 429 ? 'AI_PROVIDER_RATE_LIMITED' : 'AI_PROVIDER_UNAVAILABLE';
+
             return [
                 'text' => null,
                 'tool_calls' => [],
                 'usage' => ['prompt_tokens' => 0, 'completion_tokens' => 0, 'total_tokens' => 0],
                 'metadata' => ['model' => $this->model, 'provider' => 'gemini'],
                 'finish_reason' => 'error',
-                'error' => "Gemini API Error: " . $err,
+                'error' => $errorCode,
             ];
         } catch (\Throwable $e) {
-            Log::error("GeminiSupportAdapter exception: " . $e->getMessage());
+            Log::error('GeminiSupportAdapter exception', [
+                'event' => 'gemini_exception',
+                'provider' => 'gemini',
+                'exception_class' => get_class($e),
+                'message' => AuditRedactionService::sanitizeString($e->getMessage()),
+            ]);
+
             return [
                 'text' => null,
                 'tool_calls' => [],
                 'usage' => ['prompt_tokens' => 0, 'completion_tokens' => 0, 'total_tokens' => 0],
                 'metadata' => ['model' => $this->model, 'provider' => 'gemini'],
                 'finish_reason' => 'error',
-                'error' => $e->getMessage(),
+                'error' => 'AI_PROVIDER_UNAVAILABLE',
             ];
         }
     }

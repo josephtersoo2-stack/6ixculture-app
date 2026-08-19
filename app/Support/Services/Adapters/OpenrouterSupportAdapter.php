@@ -4,6 +4,7 @@ namespace App\Support\Services\Adapters;
 
 use App\Http\AiAgents\Agents\Openrouter as BaseOpenrouter;
 use App\Support\Contracts\AiProviderInterface;
+use App\Support\Services\AuditRedactionService;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -29,7 +30,7 @@ class OpenrouterSupportAdapter implements AiProviderInterface
                 'usage' => ['prompt_tokens' => 0, 'completion_tokens' => 0, 'total_tokens' => 0],
                 'metadata' => ['model' => $this->model, 'provider' => 'openrouter'],
                 'finish_reason' => 'error',
-                'error' => 'OpenRouter API key is not configured.',
+                'error' => 'AI_PROVIDER_CONFIGURATION_ERROR',
             ];
         }
 
@@ -60,7 +61,6 @@ class OpenrouterSupportAdapter implements AiProviderInterface
                 'X-Title' => '6ix Culture E-Commerce Support',
                 'Content-Type' => 'application/json',
             ])
-            ->withoutVerifying()
             ->timeout(45)
             ->post('https://openrouter.ai/api/v1/chat/completions', $payload);
 
@@ -108,8 +108,17 @@ class OpenrouterSupportAdapter implements AiProviderInterface
                 ];
             }
 
-            $errorBody = $response->body();
-            Log::warning("OpenRouterSupportAdapter request failed: status {$response->status()}: {$errorBody}");
+            $status = $response->status();
+            $sanitizedMsg = AuditRedactionService::sanitizeString((string)($response->json('error.message') ?? "HTTP {$status}"));
+
+            Log::warning('OpenRouterSupportAdapter request failed', [
+                'event' => 'openrouter_request_failed',
+                'provider' => 'openrouter',
+                'status' => $status,
+                'message' => $sanitizedMsg,
+            ]);
+
+            $errorCode = $status === 429 ? 'AI_PROVIDER_RATE_LIMITED' : 'AI_PROVIDER_UNAVAILABLE';
 
             return [
                 'text' => null,
@@ -117,17 +126,23 @@ class OpenrouterSupportAdapter implements AiProviderInterface
                 'usage' => ['prompt_tokens' => 0, 'completion_tokens' => 0, 'total_tokens' => 0],
                 'metadata' => ['model' => $this->model, 'provider' => 'openrouter'],
                 'finish_reason' => 'error',
-                'error' => "OpenRouter Error ({$response->status()}): " . ($json['error']['message'] ?? $errorBody),
+                'error' => $errorCode,
             ];
         } catch (\Throwable $e) {
-            Log::error("OpenRouterSupportAdapter exception: " . $e->getMessage());
+            Log::error('OpenRouterSupportAdapter exception', [
+                'event' => 'openrouter_exception',
+                'provider' => 'openrouter',
+                'exception_class' => get_class($e),
+                'message' => AuditRedactionService::sanitizeString($e->getMessage()),
+            ]);
+
             return [
                 'text' => null,
                 'tool_calls' => [],
                 'usage' => ['prompt_tokens' => 0, 'completion_tokens' => 0, 'total_tokens' => 0],
                 'metadata' => ['model' => $this->model, 'provider' => 'openrouter'],
                 'finish_reason' => 'error',
-                'error' => $e->getMessage(),
+                'error' => 'AI_PROVIDER_UNAVAILABLE',
             ];
         }
     }

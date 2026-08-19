@@ -42,11 +42,14 @@ class AuditRedactionService
         // 3. Redact Google API keys (AIza...)
         $value = preg_replace('/AIza[0-9A-Za-z\-_]{10,}/', '[REDACTED]', $value);
 
-        // 4. Redact key=value or key: value credential assignments
+        // 4. Redact URL query parameters containing keys/tokens/passwords
+        $value = preg_replace('/([?&])(key|api[-_]?key|token|access[-_]?token|secret|password)=([^&\s"\'\(\)]+)/i', '$1$2=[REDACTED]', $value);
+
+        // 5. Redact key=value or key: value credential assignments
         $pattern = '/\b(api[-_]?key|token|access[-_]?token|refresh[-_]?token|secret|password|authorization|credential|cvv|pin)\s*([:=])\s*([^\s,;&"\'\(\)\{\}\[\]]+)/i';
         $value = preg_replace($pattern, '$1$2[REDACTED]', $value);
 
-        // 5. Enforce max string length for logs & audit
+        // 6. Enforce max string length for logs & audit
         if (strlen($value) > self::MAX_STRING_LENGTH) {
             $value = mb_substr($value, 0, self::MAX_STRING_LENGTH) . '... [TRUNCATED]';
         }
