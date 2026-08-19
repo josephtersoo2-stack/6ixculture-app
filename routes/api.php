@@ -519,7 +519,7 @@ Route::prefix('admin')->name('admin.')->middleware(['auth:sanctum'])->group(func
         Route::get('/calling-code/{callingCode}', [CountryCodeController::class, 'callingCode']);
     });
 
-    Route::prefix('country')->name('country')->group(function () {
+    Route::prefix('country')->name('country.')->group(function () {
         Route::get('/', [CountryController::class, 'index']);
         Route::get('/show/{country}', [CountryController::class, 'show']);
         Route::post('/', [CountryController::class, 'store']);
@@ -527,7 +527,7 @@ Route::prefix('admin')->name('admin.')->middleware(['auth:sanctum'])->group(func
         Route::match(['put', 'patch', 'post'], '/{country}', [CountryController::class, 'update']);
     });
 
-    Route::prefix('state')->name('state')->group(function () {
+    Route::prefix('state')->name('state.')->group(function () {
         Route::get('/', [StateController::class, 'index']);
         Route::get('/simple-lists', [StateController::class, 'simpleLists']);
         Route::get('/show/{state}', [StateController::class, 'show']);
@@ -537,7 +537,7 @@ Route::prefix('admin')->name('admin.')->middleware(['auth:sanctum'])->group(func
         Route::get('/states/{country}', [StateController::class, 'statesByCountry']);
     });
 
-    Route::prefix('city')->name('city')->group(function () {
+    Route::prefix('city')->name('city.')->group(function () {
         Route::get('/', [CityController::class, 'index']);
         Route::get('/show/{city}', [CityController::class, 'show']);
         Route::post('/', [CityController::class, 'store']);
@@ -925,7 +925,7 @@ Route::prefix('frontend')->name('frontend.')->middleware(['installed', 'apiKey',
         Route::post('/', [FrontendCookiesController::class, 'set']);
     });
 
-    Route::prefix('country-state-city')->name('country-state-city')->group(function () {
+    Route::prefix('country-state-city')->name('country-state-city.')->group(function () {
         Route::get('/countries', [FrontendCountryStateCityController::class, 'countries']);
         Route::get('/states/{country}', [FrontendCountryStateCityController::class, 'statesByCountry']);
         Route::get('/cities/{state}', [FrontendCountryStateCityController::class, 'citiesByState']);
@@ -944,13 +944,14 @@ Route::prefix('frontend')->name('frontend.')->middleware(['installed', 'apiKey',
 |--------------------------------------------------------------------------
 */
 Route::prefix('v1/support')->name('v1.support.')->middleware(['installed', 'apiKey', 'localization'])->group(function () {
+    Route::get('/health', [\App\Http\Controllers\Api\V1\Support\SupportHealthController::class, 'index']);
     Route::get('/voice/capabilities', [\App\Http\Controllers\Api\V1\Support\Voice\SupportVoiceController::class, 'capabilities']);
-    Route::post('/conversations', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'store']);
+    Route::post('/conversations', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'store'])->middleware(['throttle:support-conversations']);
     Route::get('/conversations', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'index']);
     Route::get('/conversations/{conversation}', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'show']);
     Route::get('/conversations/{conversation}/language', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'getLanguage']);
     Route::post('/conversations/{conversation}/language', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'updateLanguage']);
-    Route::post('/conversations/{conversation}/messages', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'sendMessage']);
+    Route::post('/conversations/{conversation}/messages', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'sendMessage'])->middleware(['throttle:support-messages']);
     Route::get('/conversations/{conversation}/messages', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'getMessages']);
     Route::get('/conversations/{conversation}/updates', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'getUpdates']);
     Route::post('/conversations/{conversation}/request-human', [\App\Http\Controllers\Api\V1\Support\SupportConversationController::class, 'requestHuman']);
@@ -962,7 +963,7 @@ Route::prefix('v1/support')->name('v1.support.')->middleware(['installed', 'apiK
     | Voice Interface Routes (Phase 6 & 8)
     |--------------------------------------------------------------------------
     */
-    Route::prefix('conversations/{conversation}/voice')->name('voice.')->group(function () {
+    Route::prefix('conversations/{conversation}/voice')->name('voice.')->middleware(['throttle:support-voice'])->group(function () {
         Route::post('/sessions', [\App\Http\Controllers\Api\V1\Support\Voice\SupportVoiceController::class, 'startSession']);
         Route::get('/sessions/{session}', [\App\Http\Controllers\Api\V1\Support\Voice\SupportVoiceController::class, 'getSession']);
         Route::post('/sessions/{session}/end', [\App\Http\Controllers\Api\V1\Support\Voice\SupportVoiceController::class, 'endSession']);
@@ -977,7 +978,7 @@ Route::prefix('v1/support')->name('v1.support.')->middleware(['installed', 'apiK
     | Agent Human Support Workspace Routes (Phase 5, 6 & 8)
     |--------------------------------------------------------------------------
     */
-    Route::prefix('agent')->name('agent.')->middleware(['auth:sanctum'])->group(function () {
+    Route::prefix('agent')->name('agent.')->middleware(['auth:sanctum', 'throttle:support-agent'])->group(function () {
         Route::get('/conversations', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'index']);
         Route::get('/conversations/{conversation}', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'show']);
         Route::post('/conversations/{conversation}/assign', [\App\Http\Controllers\Api\V1\Support\Agent\AgentSupportConversationController::class, 'assign']);
@@ -1001,7 +1002,7 @@ Route::prefix('v1/support')->name('v1.support.')->middleware(['installed', 'apiK
     | Support Admin Governance Routes (Phase 7)
     |--------------------------------------------------------------------------
     */
-    Route::prefix('admin')->name('admin.')->middleware(['auth:sanctum'])->group(function () {
+    Route::prefix('admin')->name('admin.')->middleware(['auth:sanctum', 'throttle:support-admin'])->group(function () {
         // 1. Knowledge Administration
         Route::prefix('knowledge')->name('knowledge.')->group(function () {
             Route::get('/', [\App\Http\Controllers\Api\V1\Support\Admin\KnowledgeAdminController::class, 'index']);

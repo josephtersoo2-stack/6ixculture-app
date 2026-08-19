@@ -10,10 +10,9 @@ abstract class AiAbstract
 
     use HasAiPrompt;
 
-    public object $agent;
-    public object $aiAgent;
-
-    public object $aiAgentOption;
+    public ?object $agent = null;
+    public ?object $aiAgent = null;
+    public mixed $aiAgentOption = null;
 
 
     public function __construct()

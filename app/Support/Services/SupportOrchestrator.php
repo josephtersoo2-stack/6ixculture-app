@@ -71,9 +71,20 @@ class SupportOrchestrator implements AiOrchestratorInterface
         $maxTurns = 3;
         $lastResponse = null;
 
+        // 6. Execute Provider Chat Loop (supports up to 3 recursive tool execution turns to prevent infinite loops)
+        $turn = 0;
+        $maxTurns = 3;
+        $lastResponse = null;
+
         while ($turn < $maxTurns) {
             $turn++;
-            $response = $provider->chat($history, $tools);
+            try {
+                $response = $provider->chat($history, $tools);
+            } catch (\Throwable $e) {
+                Log::warning("AI Provider chat exception: " . $e->getMessage());
+                $errMessage = $this->createErrorMessage($conversation, 'AI service is temporarily unavailable. Please try again shortly or request a human agent.');
+                return $this->toDTO($errMessage);
+            }
 
             if (!empty($response['error'])) {
                 $errMessage = $this->createErrorMessage($conversation, $response['error'], $response['metadata'] ?? []);
@@ -252,12 +263,20 @@ class SupportOrchestrator implements AiOrchestratorInterface
 
     protected function createErrorMessage(SupportConversation $conversation, string $err, array $meta = []): SupportMessage
     {
+        $sanitizedMeta = AuditRedactionService::sanitize($meta);
+        $safeErr = is_string($err) ? (string)AuditRedactionService::sanitize($err) : 'Service issue';
+
+        $isTechnical = (bool)preg_match('/(api[-_]?key|secret|token|bearer|unauthorized|forbidden|sql|exception|stack trace|connection refused|timeout|curl|http status)/i', $err);
+        $displayContent = $isTechnical
+            ? 'I am currently having trouble processing your request. Please try again shortly or request a human support agent.'
+            : 'Sorry, we encountered an issue processing your request: ' . $safeErr;
+
         return SupportMessage::create([
             'conversation_id' => $conversation->id,
             'sender_type' => SenderType::AI,
             'message_type' => MessageType::ERROR,
-            'content' => 'Sorry, we encountered an issue processing your request: ' . $err,
-            'structured_payload' => ['error' => $err, 'metadata' => $meta],
+            'content' => $displayContent,
+            'structured_payload' => ['error' => $safeErr, 'metadata' => $sanitizedMeta],
             'is_internal' => false,
         ]);
     }

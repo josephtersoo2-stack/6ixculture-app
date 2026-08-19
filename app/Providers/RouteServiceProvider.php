@@ -30,6 +30,37 @@ class RouteServiceProvider extends ServiceProvider
             return Limit::perMinute(60)->by($request->user()?->id ?: $request->ip());
         });
 
+        RateLimiter::for('support-conversations', function (Request $request) {
+            $user = $request->user('sanctum') ?? $request->user();
+            return $user
+                ? Limit::perMinute(30)->by($user->id)
+                : Limit::perMinute(10)->by($request->ip());
+        });
+
+        RateLimiter::for('support-messages', function (Request $request) {
+            $user = $request->user('sanctum') ?? $request->user();
+            $guestKey = $request->header('X-Guest-Token') ?: $request->input('guest_token') ?: $request->ip();
+            return $user
+                ? Limit::perMinute(60)->by($user->id)
+                : Limit::perMinute(30)->by($guestKey);
+        });
+
+        RateLimiter::for('support-voice', function (Request $request) {
+            $user = $request->user('sanctum') ?? $request->user();
+            $guestKey = $request->header('X-Guest-Token') ?: $request->input('guest_token') ?: $request->ip();
+            return $user
+                ? Limit::perMinute(30)->by($user->id)
+                : Limit::perMinute(15)->by($guestKey);
+        });
+
+        RateLimiter::for('support-agent', function (Request $request) {
+            return Limit::perMinute(120)->by($request->user('sanctum')?->id ?: $request->user()?->id ?: $request->ip());
+        });
+
+        RateLimiter::for('support-admin', function (Request $request) {
+            return Limit::perMinute(60)->by($request->user('sanctum')?->id ?: $request->user()?->id ?: $request->ip());
+        });
+
         $this->routes(function () {
             Route::middleware('api')
                 ->prefix('api')

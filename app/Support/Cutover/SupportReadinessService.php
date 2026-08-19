@@ -161,6 +161,20 @@ class SupportReadinessService
                 'provider' => $voiceProviderName,
                 'multilingual_languages' => ['en', 'yo', 'ig', 'ha'],
             ],
+            'environment' => [
+                'app_env' => config('app.env', 'production'),
+                'debug' => (bool) config('app.debug', false),
+            ],
+            'queue' => [
+                'driver' => config('queue.default', 'sync'),
+                'connection' => config('queue.default', 'sync'),
+            ],
+            'cache' => [
+                'store' => config('cache.default', 'file'),
+            ],
+            'session' => [
+                'driver' => config('session.driver', 'file'),
+            ],
         ];
     }
 }
