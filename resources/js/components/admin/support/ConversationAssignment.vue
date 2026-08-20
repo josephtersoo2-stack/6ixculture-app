@@ -1,17 +1,17 @@
 <template>
-    <div class="conversation-assignment p-4 bg-white dark:bg-gray-900">
-        <h4 class="text-xs font-bold text-gray-900 dark:text-white uppercase tracking-wider mb-2 flex items-center gap-1.5">
-            <i class="lab lab-user-check text-slate-500"></i>
+    <div class="conversation-assignment p-4 bg-[#0E1424]">
+        <h4 class="text-xs font-bold text-white uppercase tracking-wider mb-2 flex items-center gap-1.5">
+            <i class="lab lab-user-check text-indigo-400"></i>
             <span>Agent Assignment</span>
         </h4>
 
         <div class="space-y-2">
             <div>
-                <label class="block text-[10px] uppercase font-bold text-gray-400 mb-1">Assignee</label>
+                <label class="block text-[10px] uppercase font-bold text-slate-400 mb-1">Assignee</label>
                 <select
                     :value="conversation?.assigned_agent?.id || ''"
                     @change="onAssignAgent($event.target.value)"
-                    class="w-full text-xs font-semibold px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-800 dark:text-gray-200 focus:outline-none"
+                    class="w-full text-xs font-semibold px-2.5 py-1.5 rounded-xl border border-[#1F293D] bg-[#131B2E] text-slate-200 focus:outline-none focus:border-indigo-500"
                 >
                     <option value="">Unassigned</option>
                     <option v-for="agent in agents" :key="agent.id" :value="agent.id">
@@ -24,7 +24,7 @@
                 <button
                     type="button"
                     @click="claimSelf"
-                    class="flex-1 py-1.5 text-xs font-semibold bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-lg transition-colors text-center"
+                    class="flex-1 py-1.5 text-xs font-semibold bg-[#131B2E] hover:bg-[#1E293B] border border-[#1F293D] text-slate-200 rounded-xl transition-colors text-center"
                 >
                     Claim (Self)
                 </button>
@@ -32,7 +32,7 @@
                     v-if="conversation?.assigned_agent"
                     type="button"
                     @click="unassign"
-                    class="py-1.5 px-3 text-xs font-semibold text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition-colors text-center"
+                    class="py-1.5 px-3 text-xs font-semibold text-rose-400 hover:bg-rose-950/40 border border-rose-900/30 rounded-xl transition-colors text-center"
                 >
                     Unassign
                 </button>

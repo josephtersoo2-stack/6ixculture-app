@@ -1,81 +1,84 @@
 <template>
-    <div class="customer-360-panel w-80 flex flex-col h-full bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-800 overflow-y-auto thin-scrolling">
+    <div class="customer-360-panel w-full flex flex-col h-full bg-[#0E1424] border-l border-[#1F293D] overflow-y-auto thin-scrolling">
         <!-- Header -->
-        <div class="px-4 py-3.5 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
-            <h3 class="text-xs font-bold text-gray-900 dark:text-white uppercase tracking-wider flex items-center gap-1.5">
-                <i class="lab lab-user-circle text-slate-500"></i>
-                <span>Customer 360</span>
+        <div class="px-4 py-3.5 border-b border-[#1F293D] flex items-center justify-between">
+            <h3 class="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                <i class="lab lab-user text-indigo-400"></i>
+                <span>Customer Info</span>
             </h3>
-            <span class="text-[10px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full">
-                Live Context
+            <span class="text-[10px] font-bold text-emerald-400 bg-emerald-950/60 border border-emerald-800/40 px-2 py-0.5 rounded-full">
+                Live 360
             </span>
         </div>
 
         <template v-if="conversation">
-            <!-- 1. Customer Profile Card -->
+            <!-- 1. Customer Profile Details -->
             <CustomerProfileCard
                 :customer360="customer360"
             />
 
-            <!-- 2. Recent Orders Panel -->
+            <!-- 2. Recent Orders Section -->
             <CustomerOrdersPanel
                 :orders="orders"
             />
 
-            <!-- 3. Support Tickets Panel -->
-            <CustomerTicketsPanel
-                :ticket="ticket || conversation.ticket"
-            />
-
-            <!-- 4. Assignment Control -->
-            <ConversationAssignment
-                :conversation="conversation"
-                :agents="agents"
-            />
-
-            <!-- 5. Quick Actions Panel (Blueprint Section 9) -->
-            <div class="p-4 border-t border-gray-200 dark:border-gray-800 space-y-3">
-                <div class="text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+            <!-- 3. Quick Actions Grid -->
+            <div class="p-4 border-b border-[#1F293D] space-y-2.5 bg-[#0E1424]">
+                <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">
                     Quick Actions
                 </div>
                 <div class="grid grid-cols-2 gap-2">
-                    <button
-                        @click="handleQuickAction('track_order')"
-                        class="p-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-slate-50 dark:bg-gray-800/60 hover:bg-white dark:hover:bg-gray-800 text-[11px] font-bold text-gray-700 dark:text-gray-200 flex items-center gap-1.5 transition-colors shadow-2xs"
+                    <router-link
+                        to="/admin/online-orders"
+                        class="p-2 rounded-xl border border-[#1F293D] bg-[#131B2E] hover:bg-[#1E293B] text-[11px] font-bold text-slate-200 flex items-center gap-1.5 transition-colors shadow-2xs"
                     >
-                        <i class="lab lab-line-truck-check text-indigo-500"></i>
+                        <i class="lab lab-bag text-indigo-400"></i>
+                        <span>View Order</span>
+                    </router-link>
+
+                    <button
+                        type="button"
+                        @click="handleQuickAction('track_order')"
+                        class="p-2 rounded-xl border border-[#1F293D] bg-[#131B2E] hover:bg-[#1E293B] text-[11px] font-bold text-slate-200 flex items-center gap-1.5 transition-colors shadow-2xs"
+                    >
+                        <i class="lab lab-line-truck-check text-emerald-400"></i>
                         <span>Track Order</span>
                     </button>
 
                     <button
-                        @click="handleQuickAction('initiate_return')"
-                        class="p-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-slate-50 dark:bg-gray-800/60 hover:bg-white dark:hover:bg-gray-800 text-[11px] font-bold text-gray-700 dark:text-gray-200 flex items-center gap-1.5 transition-colors shadow-2xs"
+                        type="button"
+                        @click="handleQuickAction('create_ticket')"
+                        class="p-2 rounded-xl border border-[#1F293D] bg-[#131B2E] hover:bg-[#1E293B] text-[11px] font-bold text-slate-200 flex items-center gap-1.5 transition-colors shadow-2xs"
                     >
-                        <i class="lab lab-line-undo text-amber-500"></i>
-                        <span>Initiate Return</span>
+                        <i class="lab lab-ticket text-amber-400"></i>
+                        <span>Create Ticket</span>
                     </button>
 
                     <button
-                        @click="handleQuickAction('issue_refund')"
-                        class="p-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-slate-50 dark:bg-gray-800/60 hover:bg-white dark:hover:bg-gray-800 text-[11px] font-bold text-gray-700 dark:text-gray-200 flex items-center gap-1.5 transition-colors shadow-2xs"
+                        type="button"
+                        @click="handleQuickAction('assign_agent')"
+                        class="p-2 rounded-xl border border-[#1F293D] bg-[#131B2E] hover:bg-[#1E293B] text-[11px] font-bold text-slate-200 flex items-center gap-1.5 transition-colors shadow-2xs"
                     >
-                        <i class="lab lab-fill-moneys text-emerald-500"></i>
-                        <span>Issue Refund</span>
-                    </button>
-
-                    <button
-                        @click="handleQuickAction('send_coupon')"
-                        class="p-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-slate-50 dark:bg-gray-800/60 hover:bg-white dark:hover:bg-gray-800 text-[11px] font-bold text-gray-700 dark:text-gray-200 flex items-center gap-1.5 transition-colors shadow-2xs"
-                    >
-                        <i class="lab lab-fill-ticket-discount text-rose-500"></i>
-                        <span>Send Coupon</span>
+                        <i class="lab lab-user-check text-indigo-400"></i>
+                        <span>Assign Agent</span>
                     </button>
                 </div>
             </div>
+
+            <!-- 4. Support Tickets Section -->
+            <CustomerTicketsPanel
+                :ticket="ticket || conversation.ticket"
+            />
+
+            <!-- 5. Assignment Control -->
+            <ConversationAssignment
+                :conversation="conversation"
+                :agents="agents"
+            />
         </template>
 
-        <div v-else class="p-8 text-center text-xs text-gray-400">
-            Select a conversation to view customer 360 details.
+        <div v-else class="p-8 text-center text-xs text-slate-500">
+            Select a conversation to view customer details.
         </div>
     </div>
 </template>
@@ -119,10 +122,17 @@ export default {
     methods: {
         handleQuickAction(actionType) {
             if (!this.conversation) return;
-            this.$store.dispatch('adminSupport/executeAction', {
-                action: actionType,
-                conversation_id: this.conversation.public_id,
-            });
+            if (actionType === 'track_order') {
+                this.$store.dispatch('adminSupport/sendReply', {
+                    publicId: this.conversation.id,
+                    message: 'Checking the live tracking status for your order...',
+                });
+            } else if (actionType === 'assign_agent') {
+                this.$store.dispatch('adminSupport/assignConversation', {
+                    publicId: this.conversation.id,
+                    agentId: 'self',
+                });
+            }
         },
     },
 };

@@ -5,7 +5,7 @@
     >
         <!-- Sender info -->
         <div class="flex items-center gap-1.5 mb-1 px-1 text-[11px] text-slate-400">
-            <span class="font-medium capitalize" :class="isCustomer ? 'text-slate-600' : 'text-slate-500'">
+            <span class="font-bold capitalize" :class="isCustomer ? 'text-indigo-600' : 'text-slate-600'">
                 {{ isCustomer ? 'You' : (isSystem ? 'System' : 'CultureAI') }}
             </span>
             <span>•</span>
@@ -45,7 +45,7 @@ export default {
         },
         bubbleClasses() {
             if (this.isCustomer) {
-                return 'bg-slate-900 text-white rounded-tr-none';
+                return 'bg-indigo-600 text-white rounded-tr-none';
             }
             if (this.isSystem) {
                 return 'bg-slate-100 text-slate-800 border border-slate-200';

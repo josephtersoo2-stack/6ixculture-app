@@ -1,11 +1,11 @@
 <template>
-    <div class="agent-copilot-panel p-3.5 bg-slate-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
+    <div class="agent-copilot-panel p-3.5 bg-[#0E1424] border-b border-[#1F293D]">
         <div class="flex items-center justify-between mb-2">
-            <div class="flex items-center gap-1.5 text-xs font-bold text-gray-800 dark:text-gray-200">
-                <i class="lab lab-sparkles text-amber-500"></i>
+            <div class="flex items-center gap-1.5 text-xs font-bold text-slate-200">
+                <i class="lab lab-sparkles text-indigo-400"></i>
                 <span>Agent Copilot Assistance</span>
             </div>
-            <span class="text-[10px] text-gray-400 font-medium">Policy-Governed</span>
+            <span class="text-[10px] text-slate-500 font-medium">Policy-Governed</span>
         </div>
 
         <!-- Suggestion Chips -->
@@ -13,20 +13,20 @@
             <div
                 v-for="(tip, idx) in copilotSuggestions"
                 :key="idx"
-                class="p-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs flex items-start justify-between gap-2 shadow-2xs hover:border-gray-400 transition-colors"
+                class="p-2.5 bg-[#131B2E] border border-[#1F293D] rounded-xl text-xs flex items-start justify-between gap-2 shadow-2xs hover:border-indigo-500/50 transition-colors"
             >
-                <div class="flex items-start gap-2">
-                    <i :class="tip.icon" class="text-sm text-slate-500 mt-0.5"></i>
-                    <div>
-                        <span class="font-semibold text-gray-900 dark:text-white block text-[11px]">{{ tip.title }}</span>
-                        <p class="text-[11px] text-gray-600 dark:text-gray-300 mt-0.5 leading-snug">{{ tip.description }}</p>
+                <div class="flex items-start gap-2 min-w-0">
+                    <i :class="tip.icon" class="text-sm text-indigo-400 mt-0.5 flex-shrink-0"></i>
+                    <div class="min-w-0">
+                        <span class="font-semibold text-white block text-[11px] truncate">{{ tip.title }}</span>
+                        <p class="text-[11px] text-slate-400 mt-0.5 leading-snug">{{ tip.description }}</p>
                     </div>
                 </div>
                 <button
                     v-if="tip.actionText"
                     type="button"
                     @click="$emit('apply-suggestion', tip.actionPayload)"
-                    class="px-2 py-1 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 text-[10px] font-semibold rounded transition-colors flex-shrink-0"
+                    class="px-2.5 py-1 bg-[#1E293B] hover:bg-indigo-600 hover:text-white text-indigo-300 text-[10px] font-bold rounded-lg border border-[#1F293D] transition-colors flex-shrink-0"
                 >
                     {{ tip.actionText }}
                 </button>

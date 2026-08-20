@@ -1,33 +1,33 @@
 <template>
-    <div class="internal-note-composer p-3 bg-amber-50/50 dark:bg-amber-950/20 border-t border-amber-200 dark:border-amber-900/60">
-        <!-- Private Notice Banner -->
-        <div class="flex items-center gap-1.5 mb-2 text-[11px] font-bold text-amber-800 dark:text-amber-300">
+    <div class="internal-note-composer p-3 bg-[#0E1424] border-t border-[#1F293D]">
+        <div class="flex items-center gap-1.5 mb-2 text-amber-400 text-xs font-bold uppercase tracking-wider">
             <i class="lab lab-lock text-xs"></i>
-            <span>Private Staff Note — Visible only to internal team members (never sent to customer)</span>
+            <span>Internal Staff Note — Invisible to Customer</span>
         </div>
 
-        <form @submit.prevent="handleSaveNote" class="flex flex-col gap-2">
+        <form @submit.prevent="handleSave" class="flex flex-col gap-2">
             <textarea
                 ref="noteTextarea"
-                v-model="noteContent"
+                v-model="noteText"
                 rows="3"
-                maxlength="4000"
-                placeholder="Type internal investigation notes, supervisor instructions, or customer history notes..."
-                class="w-full p-2.5 bg-white dark:bg-gray-900 border border-amber-300 dark:border-amber-800 rounded-xl text-xs text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:border-amber-600 focus:ring-1 focus:ring-amber-500 resize-none transition-all"
+                maxlength="2000"
+                placeholder="Type confidential internal note for staff review..."
+                @keydown.enter.exact.prevent="handleSave"
+                class="w-full p-3 bg-amber-950/20 border border-amber-800/40 rounded-xl text-xs text-amber-100 placeholder:text-amber-500/50 focus:outline-none focus:border-amber-500 resize-none transition-all"
             ></textarea>
 
             <div class="flex items-center justify-between">
-                <span class="text-[10px] text-amber-700/80 dark:text-amber-400/80">
-                    {{ noteContent.length }}/4000
+                <span class="text-[10px] text-amber-500/70">
+                    {{ noteText.length }}/2000 characters
                 </span>
 
                 <button
                     type="submit"
-                    :disabled="isSaving || noteContent.trim().length === 0"
-                    class="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-xs flex items-center gap-1.5"
+                    :disabled="isSaving || noteText.trim().length === 0"
+                    class="px-4 py-1.5 bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold text-xs rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-xs flex items-center gap-1.5"
                 >
-                    <span v-if="isSaving" class="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                    <i v-else class="lab lab-check text-xs"></i>
+                    <span v-if="isSaving" class="w-3 h-3 border-2 border-slate-950 border-t-transparent rounded-full animate-spin"></span>
+                    <i v-else class="lab lab-lock text-xs"></i>
                     <span>Save Internal Note</span>
                 </button>
             </div>
@@ -47,14 +47,14 @@ export default {
     emits: ['add-note'],
     data() {
         return {
-            noteContent: '',
+            noteText: '',
         };
     },
     methods: {
-        handleSaveNote() {
-            if (!this.noteContent.trim() || this.isSaving) return;
-            this.$emit('add-note', this.noteContent.trim());
-            this.noteContent = '';
+        handleSave() {
+            if (!this.noteText.trim() || this.isSaving) return;
+            this.$emit('add-note', this.noteText.trim());
+            this.noteText = '';
         },
     },
 };

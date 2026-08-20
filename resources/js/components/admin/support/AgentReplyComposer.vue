@@ -1,54 +1,87 @@
 <template>
-    <div class="agent-reply-composer p-3 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800">
+    <div class="agent-reply-composer p-3 bg-[#0E1424] border-t border-[#1F293D]">
         <!-- Quick Canned Responses Bar -->
         <div class="flex items-center gap-1.5 mb-2 overflow-x-auto pb-1 no-scrollbar">
-            <span class="text-[10px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1 flex-shrink-0">
-                <i class="lab lab-flash text-amber-500"></i> Canned:
+            <span class="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1 flex-shrink-0">
+                <i class="lab lab-flash text-indigo-400"></i> Canned:
             </span>
             <button
                 v-for="(macro, idx) in cannedResponses"
                 :key="idx"
                 type="button"
                 @click="insertCanned(macro.text)"
-                class="px-2 py-0.5 text-[11px] bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-md transition-colors whitespace-nowrap flex-shrink-0"
+                class="px-2 py-0.5 text-[11px] bg-[#131B2E] hover:bg-[#1E293B] border border-[#1F293D] text-slate-300 rounded-lg transition-colors whitespace-nowrap flex-shrink-0"
             >
                 {{ macro.label }}
             </button>
         </div>
 
         <form @submit.prevent="handleSend" class="flex flex-col gap-2">
-            <textarea
-                ref="replyTextarea"
-                v-model="replyText"
-                rows="3"
-                maxlength="4000"
-                placeholder="Type customer reply... (Shift + Enter for new line)"
-                @keydown.enter.exact.prevent="handleSend"
-                class="w-full p-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-xs text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:border-gray-900 dark:focus:border-white resize-none transition-all"
-            ></textarea>
+            <div class="relative">
+                <textarea
+                    ref="replyTextarea"
+                    v-model="replyText"
+                    rows="3"
+                    maxlength="4000"
+                    placeholder="Type your message... (Shift + Enter for new line)"
+                    @keydown.enter.exact.prevent="handleSend"
+                    class="w-full p-3 bg-[#131B2E] border border-[#1F293D] rounded-xl text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500 resize-none transition-all"
+                ></textarea>
+            </div>
 
+            <!-- Action Toolbar & Send -->
             <div class="flex items-center justify-between">
-                <label class="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400 cursor-pointer select-none">
-                    <input
-                        type="checkbox"
-                        v-model="resolveAfterReply"
-                        class="rounded border-gray-300 text-gray-900 focus:ring-gray-900 dark:focus:ring-white"
-                    />
-                    <span>Mark as Resolved after sending</span>
-                </label>
+                <!-- Left Action Icons (Attachment, Emoji, Voice, Translate) -->
+                <div class="flex items-center gap-1 text-slate-400">
+                    <button
+                        type="button"
+                        class="p-1.5 hover:text-white hover:bg-[#1E293B] rounded-lg transition-colors"
+                        title="Attach file"
+                    >
+                        <i class="lab lab-paperclip text-sm"></i>
+                    </button>
+                    <button
+                        type="button"
+                        class="p-1.5 hover:text-white hover:bg-[#1E293B] rounded-lg transition-colors"
+                        title="Insert emoji"
+                    >
+                        <i class="lab lab-smile text-sm"></i>
+                    </button>
+                    <button
+                        type="button"
+                        class="p-1.5 hover:text-indigo-400 hover:bg-[#1E293B] rounded-lg transition-colors"
+                        title="Voice dictation"
+                    >
+                        <i class="lab lab-mic text-sm"></i>
+                    </button>
+                    <button
+                        type="button"
+                        class="p-1.5 hover:text-indigo-400 hover:bg-[#1E293B] rounded-lg transition-colors"
+                        title="Translate message"
+                    >
+                        <i class="lab lab-translate text-sm"></i>
+                    </button>
+                </div>
 
-                <div class="flex items-center gap-2">
-                    <span class="text-[10px] text-gray-400">
-                        {{ replyText.length }}/4000
-                    </span>
+                <!-- Right: Checkbox & Purple Send Button -->
+                <div class="flex items-center gap-3">
+                    <label class="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer select-none">
+                        <input
+                            type="checkbox"
+                            v-model="resolveAfterReply"
+                            class="rounded border-[#1F293D] bg-[#131B2E] text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <span>Resolve after reply</span>
+                    </label>
+
                     <button
                         type="submit"
                         :disabled="isSending || replyText.trim().length === 0"
-                        class="px-4 py-1.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 font-semibold text-xs rounded-xl hover:bg-gray-800 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-xs flex items-center gap-1.5"
+                        class="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-xs flex items-center gap-1.5"
                     >
-                        <span v-if="isSending" class="w-3 h-3 border-2 border-white dark:border-gray-900 border-t-transparent rounded-full animate-spin"></span>
-                        <i v-else class="lab lab-send text-xs"></i>
-                        <span>Send Reply</span>
+                        <span v-if="isSending" class="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                        <span v-else>Send</span>
+                        <i v-if="!isSending" class="lab lab-send text-xs"></i>
                     </button>
                 </div>
             </div>

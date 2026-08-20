@@ -1,14 +1,14 @@
 <template>
-    <div class="support-queue-filters p-3.5 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900">
+    <div class="support-queue-filters p-3.5 border-b border-[#1F293D] bg-[#0E1424]">
         <!-- Search input -->
         <div class="relative mb-3">
-            <i class="lab lab-search absolute left-3 top-2.5 text-gray-400 text-sm"></i>
+            <i class="lab lab-search absolute left-3 top-2.5 text-slate-500 text-sm"></i>
             <input
                 type="text"
                 v-model="localFilters.search"
                 @input="debounceSearch"
                 placeholder="Search by customer, subject, ID..."
-                class="w-full pl-9 pr-3 py-1.5 text-xs bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-800 dark:text-gray-200 focus:outline-none focus:border-gray-900 dark:focus:border-white transition-all"
+                class="w-full pl-9 pr-3 py-1.5 text-xs bg-[#131B2E] border border-[#1F293D] rounded-xl text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500 transition-all"
             />
         </div>
 
@@ -19,8 +19,8 @@
                 :key="tab.value"
                 type="button"
                 @click="setStatus(tab.value)"
-                class="px-2.5 py-1 rounded-md whitespace-nowrap transition-colors"
-                :class="localFilters.status === tab.value ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900 font-semibold shadow-xs' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800'"
+                class="px-2.5 py-1 rounded-lg whitespace-nowrap transition-colors"
+                :class="localFilters.status === tab.value ? 'bg-indigo-600 text-white font-semibold shadow-xs' : 'text-slate-400 hover:text-white hover:bg-[#161F36]'"
             >
                 {{ tab.label }}
             </button>
@@ -30,11 +30,11 @@
         <div class="grid grid-cols-2 gap-2">
             <!-- Department Dropdown -->
             <div>
-                <label class="block text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">Department</label>
+                <label class="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Department</label>
                 <select
                     v-model="localFilters.department_id"
                     @change="applyFilters"
-                    class="w-full text-xs bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-2 py-1 text-gray-700 dark:text-gray-300 focus:outline-none"
+                    class="w-full text-xs bg-[#131B2E] border border-[#1F293D] rounded-lg px-2 py-1 text-slate-300 focus:outline-none focus:border-indigo-500"
                 >
                     <option value="">All Departments</option>
                     <option v-for="dept in departments" :key="dept.id" :value="dept.id">
@@ -45,11 +45,11 @@
 
             <!-- Priority Dropdown -->
             <div>
-                <label class="block text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">Priority</label>
+                <label class="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Priority</label>
                 <select
                     v-model="localFilters.priority"
                     @change="applyFilters"
-                    class="w-full text-xs bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-2 py-1 text-gray-700 dark:text-gray-300 focus:outline-none"
+                    class="w-full text-xs bg-[#131B2E] border border-[#1F293D] rounded-lg px-2 py-1 text-slate-300 focus:outline-none focus:border-indigo-500"
                 >
                     <option value="">All Priorities</option>
                     <option value="urgent">Urgent</option>
@@ -65,24 +65,24 @@
                     <button
                         type="button"
                         @click="setAssignedFilter('all')"
-                        class="px-2 py-0.5 text-[10px] font-medium rounded"
-                        :class="!localFilters.assigned_to && !localFilters.unassigned ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white' : 'text-gray-500'"
+                        class="px-2 py-0.5 text-[10px] font-medium rounded-lg"
+                        :class="!localFilters.assigned_to && !localFilters.unassigned ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'"
                     >
                         All
                     </button>
                     <button
                         type="button"
                         @click="setAssignedFilter('me')"
-                        class="px-2 py-0.5 text-[10px] font-medium rounded"
-                        :class="localFilters.assigned_to === 'me' ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white' : 'text-gray-500'"
+                        class="px-2 py-0.5 text-[10px] font-medium rounded-lg"
+                        :class="localFilters.assigned_to === 'me' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'"
                     >
                         Assigned to Me
                     </button>
                     <button
                         type="button"
                         @click="setAssignedFilter('unassigned')"
-                        class="px-2 py-0.5 text-[10px] font-medium rounded"
-                        :class="localFilters.unassigned ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white' : 'text-gray-500'"
+                        class="px-2 py-0.5 text-[10px] font-medium rounded-lg"
+                        :class="localFilters.unassigned ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'"
                     >
                         Unassigned
                     </button>
@@ -92,7 +92,7 @@
                     v-if="hasActiveFilters"
                     type="button"
                     @click="resetFilters"
-                    class="text-[10px] text-rose-500 hover:text-rose-700 font-semibold"
+                    class="text-[10px] text-rose-400 hover:text-rose-300 font-semibold"
                 >
                     Reset
                 </button>
